@@ -31,15 +31,51 @@ contract KeystoneForwarderTest is Test {
     assertEq(decodedReport, report, "not equal");
   }
 
+  uint256 internal constant MAX_ORACLES = 31;
+
+  struct Signer {
+    uint256 mockPrivateKey;
+    address signerAddress;
+  }
+  Signer[MAX_ORACLES] internal s_signers;
+
   function test_it_works() public {
     KeystoneForwarder forwarder = new KeystoneForwarder();
     Receiver receiver = new Receiver();
+
+    // generate signers
+    for (uint256 i; i < MAX_ORACLES; i++) {
+      uint256 mockPK = i + 1;
+      s_signers[i].mockPrivateKey = mockPK;
+      s_signers[i].signerAddress = vm.addr(mockPK);
+    }
+
+    // configure contract with signers
+    uint8 f = 0;
+    address[] memory signers = new address[](s_signers.length);
+    for (uint256 i = 0; i < s_signers.length; i++) {
+      signers[i] = s_signers[i].signerAddress;
+    }
+    forwarder.setConfig(f, signers);
 
     // taken from https://github.com/smartcontractkit/chainlink/blob/2390ec7f3c56de783ef4e15477e99729f188c524/core/services/relay/evm/cap_encoder_test.go#L42-L55
     bytes
       memory report = hex"6d795f69640000000000000000000000000000000000000000000000000000006d795f657865637574696f6e5f696400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000301020300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004aabbccdd00000000000000000000000000000000000000000000000000000000";
     bytes memory data = abi.encodeWithSignature("foo(bytes)", report);
-    bytes[] memory signatures = new bytes[](0);
+
+    // generate signatures
+    bytes32 hash = keccak256(report);
+
+    uint256 numSignatures = f + 1;
+    bytes[] memory signatures = new bytes[](numSignatures);
+
+    for (uint256 i = 0; i < numSignatures; i++) {
+      (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signers[i].mockPrivateKey, hash);
+      // rs[i] = r;
+      // ss[i] = s;
+      // vs[i] = bytes1(v - 27);
+      signatures[i] = bytes.concat(r, s, bytes1(v));
+    }
 
     vm.expectCall(address(receiver), data);
     vm.recordLogs();
