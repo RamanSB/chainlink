@@ -19,22 +19,22 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
   error WrongNumberOfSignatures();
 
+  error InvalidDonId();
   error InvalidSigner();
 
   uint256 private constant SELECTOR_LENGTH = 4;
   uint256 private constant REPORT_LENGTH = 64;
 
-  struct HotVars {
-    bool reentrancyGuard; // guard against reentrancy
-    uint8 n;
-    uint8 f;
-  }
-
-  HotVars internal s_hotVars; // Mixture of config and state, commonly accessed
+  bool internal s_reentrancyGuard; // guard against reentrancy
 
   /// @notice Contains the signing address of each oracle
-  address[] internal s_signers;
-  mapping(address => uint8 index) internal s_signersMap; // TODO: is this more gas efficient than a for loop { eq }?
+  struct OracleSet {
+    bool exists;
+    uint8 f; // Number of faulty nodes allowed
+    address[] signers;
+    mapping(address => uint256) _positions; // 1-indexed to detect unset values
+  }
+  mapping(bytes4 donId => OracleSet) internal s_configs;
 
   mapping(bytes32 => address) internal s_reports;
 
@@ -44,24 +44,23 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
   // NOTE: we don't inherit OCR2Base since unlike aggregator we only care about signers, not transmitters
   // and the signers don't fetch their config from the forwarder
-  function setConfig(uint8 f, address[] calldata signers) external nonReentrant {
+  function setConfig(bytes4 donId, uint8 f, address[] calldata signers) external nonReentrant {
     // TODO: how does setConfig handle expiration? e.g. if the signer set changes
 
-    // remove any old signer/transmitter addresses
-    while (s_signers.length != 0) {
-      uint256 lastIdx = s_signers.length - 1;
-      address signer = s_signers[lastIdx];
-      delete s_signersMap[signer];
-      s_signers.pop();
-    }
+    // remove any old signer addresses
+    delete s_configs[donId];
+    s_configs[donId].exists = true;
+    s_configs[donId].signers = signers;
 
-    // add new signer/transmitter addresses
+    // add new signer addresses
     for (uint256 i = 0; i < signers.length; ++i) {
-      if(s_signersMap[signers[i]] != 0) revert RepeatedSigner();
-      s_signersMap[signers[i]] = uint8(i) + 1;
-      s_signers.push(signers[i]);
+      // assign indices, detect duplicates
+      address signer = signers[i];
+      if(s_configs[donId]._positions[signer] != 0) revert RepeatedSigner();
+      s_configs[donId]._positions[signer] = uint8(i) + 1;
+      s_configs[donId].signers.push(signer);
     }
-    s_hotVars.f = f;
+    s_configs[donId].f = f;
   }
 
   // send a report to targetAddress
@@ -74,13 +73,17 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       revert InvalidData(data);
     }
 
-    if (signatures.length != s_hotVars.f + 1) {
-      revert WrongNumberOfSignatures();
-    }
-
     // data is an encoded call with the selector prefixed: (bytes4 selector, bytes report, ...)
     // we are able to partially decode just the first param, since we don't know the rest
     bytes memory rawReport = abi.decode(data[4:], (bytes));
+
+    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
+
+    if (signatures.length != s_configs[donId].f + 1) {
+      revert WrongNumberOfSignatures();
+    }
+
+    if (!s_configs[donId].exists) revert InvalidDonId();
 
     bytes32 hash = keccak256(rawReport);
 
@@ -94,14 +97,12 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       address signer = ecrecover(hash, v, r, s);
 
       // validate signer is trusted and signature is unique
-      index = s_signersMap[signer];
+      index = uint8(s_configs[donId]._positions[signer]);
       if (index == 0) revert InvalidSigner(); // index is 1-indexed so we can detect unset signers
       index -= 1;
       if(signed[index] != address(0)) revert RepeatedSigner();
       signed[index] = signer;
     }
-
-    (bytes32 workflowId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
 
     // report was already processed
     if (s_reports[workflowExecutionId] != address(0)) {
@@ -129,9 +130,9 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
    * @dev replicates Open Zeppelin's ReentrancyGuard but optimized to fit our storage
    */
   modifier nonReentrant() {
-    if (s_hotVars.reentrancyGuard) revert ReentrantCall();
-    s_hotVars.reentrancyGuard = true;
+    if (s_reentrancyGuard) revert ReentrantCall();
+    s_reentrancyGuard = true;
     _;
-    s_hotVars.reentrancyGuard = false;
+    s_reentrancyGuard = false;
   }
 }

@@ -7,16 +7,16 @@ import "../KeystoneForwarder.sol";
 import {Utils} from "../libraries/Utils.sol";
 
 contract Receiver {
-  event MessageReceived(bytes32 indexed workflowId, bytes32 indexed workflowExecutionId, bytes[] mercuryReports);
+  event MessageReceived(bytes32 indexed workflowId, bytes32 indexed workflowExecutionId, bytes4 indexed donId, bytes[] mercuryReports);
 
   constructor() {}
 
   function foo(bytes calldata rawReport) external {
     // decode metadata
-    (bytes32 workflowId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
+    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
     // parse actual report
-    bytes[] memory mercuryReports = abi.decode(rawReport[64:], (bytes[]));
-    emit MessageReceived(workflowId, workflowExecutionId, mercuryReports);
+    bytes[] memory mercuryReports = abi.decode(rawReport[68:], (bytes[]));
+    emit MessageReceived(workflowId, workflowExecutionId, donId, mercuryReports);
   }
 }
 
@@ -52,15 +52,18 @@ contract KeystoneForwarderTest is Test {
 
     // configure contract with signers
     uint8 f = 0;
-    address[] memory signers = new address[](s_signers.length);
-    for (uint256 i = 0; i < s_signers.length; i++) {
-      signers[i] = s_signers[i].signerAddress;
+    bytes4 donId = 0x01020304;
+    {
+      address[] memory signers = new address[](s_signers.length);
+      for (uint256 i = 0; i < s_signers.length; i++) {
+        signers[i] = s_signers[i].signerAddress;
+      }
+      forwarder.setConfig(donId, f, signers);
     }
-    forwarder.setConfig(f, signers);
 
     // taken from https://github.com/smartcontractkit/chainlink/blob/2390ec7f3c56de783ef4e15477e99729f188c524/core/services/relay/evm/cap_encoder_test.go#L42-L55
     bytes
-      memory report = hex"6d795f69640000000000000000000000000000000000000000000000000000006d795f657865637574696f6e5f696400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000301020300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004aabbccdd00000000000000000000000000000000000000000000000000000000";
+      memory report = hex"6d795f6964000000000000000000000000000000000000000000000000000000010203046d795f657865637574696f6e5f696400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000301020300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004aabbccdd00000000000000000000000000000000000000000000000000000000";
     bytes memory data = abi.encodeWithSignature("foo(bytes)", report);
 
     // generate signatures
@@ -90,6 +93,7 @@ contract KeystoneForwarderTest is Test {
     bytes32 executionId = hex"6d795f657865637574696f6e5f69640000000000000000000000000000000000";
     assertEq(entries[0].topics[1], workflowId);
     assertEq(entries[0].topics[2], executionId);
+    assertEq(entries[0].topics[3], donId);
     bytes[] memory mercuryReports = abi.decode(entries[0].data, (bytes[]));
     assertEq(mercuryReports.length, 2);
     assertEq(mercuryReports[0], hex"010203");
