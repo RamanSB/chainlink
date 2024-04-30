@@ -27,6 +27,9 @@ func TestRunLogBasic(t *testing.T) {
 	t.Parallel()
 	l := logging.GetTestLogger(t)
 
+	//TODO remove me
+	require.True(t, false, "on demand")
+
 	config, err := tc.GetConfig("Smoke", tc.RunLog)
 	require.NoError(t, err, "Error getting config")
 
