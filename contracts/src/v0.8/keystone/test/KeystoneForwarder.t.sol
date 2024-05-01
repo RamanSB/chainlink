@@ -4,21 +4,7 @@ pragma solidity ^0.8.19;
 import "forge-std/Test.sol";
 
 import "../KeystoneForwarder.sol";
-import {Utils} from "../libraries/Utils.sol";
-
-contract Receiver {
-  event MessageReceived(bytes32 indexed workflowId, bytes32 indexed workflowExecutionId, bytes4 indexed donId, bytes[] mercuryReports);
-
-  constructor() {}
-
-  function foo(bytes calldata rawReport) external {
-    // decode metadata
-    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
-    // parse actual report
-    bytes[] memory mercuryReports = abi.decode(rawReport[Utils.REPORT_HEADER_LENGTH:], (bytes[]));
-    emit MessageReceived(workflowId, workflowExecutionId, donId, mercuryReports);
-  }
-}
+import "./mocks/Receiver.sol";
 
 contract KeystoneForwarderTest is Test {
   function test_abi_partial_decoding_works() public {
