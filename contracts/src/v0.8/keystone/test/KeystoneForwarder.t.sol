@@ -115,7 +115,7 @@ contract KeystoneForwarderTest is Test {
 
     {
       // validate transmitter was recorded
-      address transmitter = forwarder.getTransmitter(address(receiver), executionId);
+      address transmitter = forwarder.getTransmitter(address(receiver), receiver.foo.selector, executionId);
       assertEq(transmitter, TRANSMITTER);
     }
 

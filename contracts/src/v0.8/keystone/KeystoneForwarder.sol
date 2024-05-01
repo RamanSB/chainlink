@@ -50,7 +50,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   }
   mapping(bytes4 donId => OracleSet) internal s_configs;
 
-  // reportId = keccak256(bytes32(receiver) | workflowExecutionId)
+  // reportId = keccak256(bytes20(receiver) | selector | workflowExecutionId)
   mapping(bytes32 reportId => address transmitter) internal s_reports;
 
   constructor() ConfirmedOwner(msg.sender) {}
@@ -85,6 +85,12 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     s_configs[donId].f = f;
   }
 
+  function getSelector(bytes memory _data) private pure returns(bytes4 sig) {
+      assembly {
+          sig := mload(add(_data, 32))
+      }
+  }
+
   // send a report to receiver
   function report(
     address receiver,
@@ -97,9 +103,10 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
     // data is an encoded call with the selector prefixed: (bytes4 selector, bytes report, ...)
     // we are able to partially decode just the first param, since we don't know the rest
+    bytes4 selector = getSelector(data);
     bytes memory rawReport = abi.decode(data[4:], (bytes));
 
-    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
+    (/* bytes32 workflowId */, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
 
     if (signatures.length != s_configs[donId].f + 1) {
       revert WrongNumberOfSignatures();
@@ -126,7 +133,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       signed[index] = signer;
     }
 
-    bytes32 reportId = _reportId(receiver, workflowExecutionId);
+    bytes32 reportId = _reportId(receiver, selector, workflowExecutionId);
 
     if (s_reports[reportId] != address(0)) {
       // report was already processed
@@ -140,14 +147,14 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     return true;
   }
 
-  function _reportId(address receiver, bytes32 workflowExecutionId) internal pure returns (bytes32) {
+  function _reportId(address receiver, bytes4 selector, bytes32 workflowExecutionId) internal pure returns (bytes32) {
     // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
-    return keccak256(bytes.concat(bytes32(uint256(uint160(receiver))), workflowExecutionId));
+    return keccak256(bytes.concat(bytes20(uint160(receiver)), selector, workflowExecutionId));
   }
 
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
-  function getTransmitter(address receiver, bytes32 workflowExecutionId) external view returns (address) {
-    bytes32 reportId = _reportId(receiver, workflowExecutionId);
+  function getTransmitter(address receiver, bytes4 selector, bytes32 workflowExecutionId) external view returns (address) {
+    bytes32 reportId = _reportId(receiver, selector, workflowExecutionId);
     return s_reports[reportId];
   }
 
