@@ -71,7 +71,6 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       address signer = s_configs[donId].signers[i];
       delete s_configs[donId]._positions[signer];
     }
-    delete s_configs[donId];
     s_configs[donId].signers = signers;
 
     // add new signer addresses
