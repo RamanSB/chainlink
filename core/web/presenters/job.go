@@ -27,18 +27,19 @@ func (t JobSpecType) String() string {
 }
 
 const (
-	DirectRequestJobSpec     JobSpecType = "directrequest"
-	FluxMonitorJobSpec       JobSpecType = "fluxmonitor"
-	OffChainReportingJobSpec JobSpecType = "offchainreporting"
-	KeeperJobSpec            JobSpecType = "keeper"
-	CronJobSpec              JobSpecType = "cron"
-	VRFJobSpec               JobSpecType = "vrf"
-	WebhookJobSpec           JobSpecType = "webhook"
-	BlockhashStoreJobSpec    JobSpecType = "blockhashstore"
-	BlockHeaderFeederJobSpec JobSpecType = "blockheaderfeeder"
-	BootstrapJobSpec         JobSpecType = "bootstrap"
-	GatewayJobSpec           JobSpecType = "gateway"
-	WorkflowJobSpec          JobSpecType = "workflow"
+	DirectRequestJobSpec      JobSpecType = "directrequest"
+	FluxMonitorJobSpec        JobSpecType = "fluxmonitor"
+	OffChainReportingJobSpec  JobSpecType = "offchainreporting"
+	KeeperJobSpec             JobSpecType = "keeper"
+	CronJobSpec               JobSpecType = "cron"
+	VRFJobSpec                JobSpecType = "vrf"
+	WebhookJobSpec            JobSpecType = "webhook"
+	BlockhashStoreJobSpec     JobSpecType = "blockhashstore"
+	BlockHeaderFeederJobSpec  JobSpecType = "blockheaderfeeder"
+	BootstrapJobSpec          JobSpecType = "bootstrap"
+	GatewayJobSpec            JobSpecType = "gateway"
+	WorkflowJobSpec           JobSpecType = "workflow"
+	StandardCapabilityJobSpec JobSpecType = "standardcapability"
 )
 
 // DirectRequestSpec defines the spec details of a DirectRequest Job
@@ -447,6 +448,18 @@ func NewWorkflowSpec(spec *job.WorkflowSpec) *WorkflowSpec {
 	}
 }
 
+type StandardCapabilitySpec struct {
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func NewStandardCapabilitySpec(spec *job.StandardCapabilitySpec) *StandardCapabilitySpec {
+	return &StandardCapabilitySpec{
+		CreatedAt: spec.CreatedAt,
+		UpdatedAt: spec.UpdatedAt,
+	}
+}
+
 // JobError represents errors on the job
 type JobError struct {
 	ID          int64     `json:"id"`
@@ -490,6 +503,7 @@ type JobResource struct {
 	BootstrapSpec          *BootstrapSpec          `json:"bootstrapSpec"`
 	GatewaySpec            *GatewaySpec            `json:"gatewaySpec"`
 	WorkflowSpec           *WorkflowSpec           `json:"workflowSpec"`
+	StandardCapabilitySpec *StandardCapabilitySpec `json:"standardCapabilitySpec"`
 	PipelineSpec           PipelineSpec            `json:"pipelineSpec"`
 	Errors                 []JobError              `json:"errors"`
 }
@@ -538,6 +552,8 @@ func NewJobResource(j job.Job) *JobResource {
 		// no spec; nothing to do
 	case job.Workflow:
 		resource.WorkflowSpec = NewWorkflowSpec(j.WorkflowSpec)
+	case job.StandardCapability:
+		resource.StandardCapabilitySpec = NewStandardCapabilitySpec(j.StandardCapabilitySpec)
 	case job.LegacyGasStationServer, job.LegacyGasStationSidecar:
 		// unsupported
 	}
