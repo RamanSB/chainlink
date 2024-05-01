@@ -39,7 +39,6 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   error InvalidSigner();
 
   uint256 private constant SELECTOR_LENGTH = 4;
-  uint256 public constant REPORT_HEADER_LENGTH = 68;
 
   bool internal s_reentrancyGuard; // guard against reentrancy
 
@@ -111,9 +110,8 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
     bytes32 hash = keccak256(rawReport);
 
-    address[MAX_ORACLES] memory signed;
-
     // validate signatures
+    address[MAX_ORACLES] memory signed;
     uint8 index = 0;
     for (uint256 i = 0; i < signatures.length; i++) {
       // TODO: is libocr-style multiple bytes32 arrays more optimal, gas-wise?
@@ -128,8 +126,8 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       signed[index] = signer;
     }
 
-    // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
     bytes32 reportId = _reportId(receiver, workflowExecutionId);
+
     if (s_reports[reportId] != address(0)) {
       // report was already processed
       return false;
