@@ -15,14 +15,12 @@ contract Receiver {
     // decode metadata
     (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
     // parse actual report
-    bytes[] memory mercuryReports = abi.decode(rawReport[68:], (bytes[]));
+    bytes[] memory mercuryReports = abi.decode(rawReport[Utils.REPORT_HEADER_LENGTH:], (bytes[]));
     emit MessageReceived(workflowId, workflowExecutionId, donId, mercuryReports);
   }
 }
 
 contract KeystoneForwarderTest is Test {
-  function setUp() public virtual {}
-
   function test_abi_partial_decoding_works() public {
     bytes memory report = hex"0102";
     uint256 amount = 1;
@@ -31,6 +29,7 @@ contract KeystoneForwarderTest is Test {
     assertEq(decodedReport, report, "not equal");
   }
 
+  address internal constant TRANSMITTER = address(50);
   uint256 internal constant MAX_ORACLES = 31;
 
   struct Signer {
@@ -39,25 +38,60 @@ contract KeystoneForwarderTest is Test {
   }
   Signer[MAX_ORACLES] internal s_signers;
 
+  function setUp() public virtual {
+    uint256 seed = 0;
+    generateSigners(seed);
+  }
+
+  function generateSigners(uint256 seed) internal {
+    // generate signers
+    for (uint256 i; i < MAX_ORACLES; i++) {
+      uint256 mockPK = seed + i + 1;
+      s_signers[i].mockPrivateKey = mockPK;
+      s_signers[i].signerAddress = vm.addr(mockPK);
+    }
+  }
+
+  function _getSignerAddresses() internal view returns (address[] memory) {
+    address[] memory signerAddrs = new address[](s_signers.length);
+    for (uint256 i = 0; i < signerAddrs.length; i++) {
+      signerAddrs[i] = s_signers[i].signerAddress;
+    }
+    return signerAddrs;
+  }
+
+  function _generateSignatures(bytes memory report, uint256 numSignatures) internal view returns (bytes[] memory) {
+    bytes32 hash = keccak256(report);
+    bytes[] memory signatures = new bytes[](numSignatures);
+
+    for (uint256 i = 0; i < numSignatures; i++) {
+      (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signers[i].mockPrivateKey, hash);
+      signatures[i] = bytes.concat(r, s, bytes1(v));
+    }
+    return signatures;
+  }
+
   function test_it_works() public {
     KeystoneForwarder forwarder = new KeystoneForwarder();
     Receiver receiver = new Receiver();
 
     // generate signers
-    for (uint256 i; i < MAX_ORACLES; i++) {
-      uint256 mockPK = i + 1;
-      s_signers[i].mockPrivateKey = mockPK;
-      s_signers[i].signerAddress = vm.addr(mockPK);
-    }
+    setUp();
 
     // configure contract with signers
-    uint8 f = 0;
+    uint8 f = 1;
     bytes4 donId = 0x01020304;
     {
-      address[] memory signers = new address[](s_signers.length);
-      for (uint256 i = 0; i < s_signers.length; i++) {
-        signers[i] = s_signers[i].signerAddress;
-      }
+      address[] memory signers = _getSignerAddresses();
+      forwarder.setConfig(donId, f, signers);
+    }
+
+    // set config doesn't allow duplicate signers
+    {
+      address[] memory signers = _getSignerAddresses();
+      signers[1] = signers[0];
+
+      vm.expectRevert(KeystoneForwarder.RepeatedSigner.selector);
       forwarder.setConfig(donId, f, signers);
     }
 
@@ -67,40 +101,49 @@ contract KeystoneForwarderTest is Test {
     bytes memory data = abi.encodeWithSignature("foo(bytes)", report);
 
     // generate signatures
-    bytes32 hash = keccak256(report);
-
     uint256 numSignatures = f + 1;
-    bytes[] memory signatures = new bytes[](numSignatures);
-
-    for (uint256 i = 0; i < numSignatures; i++) {
-      (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signers[i].mockPrivateKey, hash);
-      // rs[i] = r;
-      // ss[i] = s;
-      // vs[i] = bytes1(v - 27);
-      signatures[i] = bytes.concat(r, s, bytes1(v));
-    }
+    bytes[] memory signatures = _generateSignatures(report, numSignatures);
 
     vm.expectCall(address(receiver), data);
     vm.recordLogs();
 
+    vm.startPrank(TRANSMITTER);
     bool delivered1 = forwarder.report(address(receiver), data, signatures);
     assertTrue(delivered1, "report not delivered");
 
-    Vm.Log[] memory entries = vm.getRecordedLogs();
-    assertEq(entries[0].emitter, address(receiver));
-    // validate workflow id and workflow execution id
     bytes32 workflowId = hex"6d795f6964000000000000000000000000000000000000000000000000000000";
     bytes32 executionId = hex"6d795f657865637574696f6e5f69640000000000000000000000000000000000";
-    assertEq(entries[0].topics[1], workflowId);
-    assertEq(entries[0].topics[2], executionId);
-    assertEq(entries[0].topics[3], donId);
-    bytes[] memory mercuryReports = abi.decode(entries[0].data, (bytes[]));
-    assertEq(mercuryReports.length, 2);
-    assertEq(mercuryReports[0], hex"010203");
-    assertEq(mercuryReports[1], hex"aabbccdd");
+    {
+      // validate receiver was called
+      Vm.Log[] memory entries = vm.getRecordedLogs();
+      assertEq(entries[0].emitter, address(receiver));
+      // validate workflow id and workflow execution id
+      assertEq(entries[0].topics[1], workflowId);
+      assertEq(entries[0].topics[2], executionId);
+      assertEq(entries[0].topics[3], donId);
+      bytes[] memory mercuryReports = abi.decode(entries[0].data, (bytes[]));
+      assertEq(mercuryReports.length, 2);
+      assertEq(mercuryReports[0], hex"010203");
+      assertEq(mercuryReports[1], hex"aabbccdd");
+    }
 
-    // doesn't deliver the same report more than once
-    bool delivered2 = forwarder.report(address(receiver), data, signatures);
-    assertFalse(delivered2, "report redelivered");
+    {
+      // validate transmitter was recorded
+      address transmitter = forwarder.getTransmitter(address(receiver), executionId);
+      assertEq(transmitter, TRANSMITTER);
+    }
+
+    {
+      // doesn't deliver the same report more than once
+      bool delivered2 = forwarder.report(address(receiver), data, signatures);
+      assertFalse(delivered2, "report redelivered");
+    }
+
+    {
+      // doesn't allow duplicate signers
+      signatures[1] = signatures[0];
+      vm.expectRevert(KeystoneForwarder.RepeatedSigner.selector);
+      bool delivered3 = forwarder.report(address(receiver), data, signatures);
+    }
   }
 }

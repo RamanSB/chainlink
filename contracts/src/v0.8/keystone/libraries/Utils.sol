@@ -3,6 +3,8 @@ pragma solidity ^0.8.19;
 
 // solhint-disable gas-custom-errors
 library Utils {
+  uint256 public constant REPORT_HEADER_LENGTH = 68;
+
   // solhint-disable avoid-low-level-calls, chainlink-solidity/explicit-returns
   function _splitSignature(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
     require(sig.length == 65, "invalid signature length");

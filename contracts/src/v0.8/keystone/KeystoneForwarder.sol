@@ -11,9 +11,25 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   error ReentrantCall();
 
   /// @notice This error is returned when the data with report is invalid.
-  /// This can happen if the data is shorter than SELECTOR_LENGTH + REPORT_LENGTH.
+  /// This can happen if the data is shorter than SELECTOR_LENGTH + REPORT_HEADER_LENGTH.
   /// @param data the data that was received
   error InvalidData(bytes data);
+
+  /// @notice This error is thrown whenever trying to set a config
+  /// with a fault tolerance of 0
+  error FaultToleranceMustBePositive();
+
+  /// @notice This error is thrown whenever a report is signed
+  /// with more than the max number of signers
+  /// @param numSigners The number of signers who have signed the report
+  /// @param maxSigners The maximum number of signers that can sign a report
+  error ExcessSigners(uint256 numSigners, uint256 maxSigners);
+
+  /// @notice This error is thrown whenever a report is signed
+  /// with less than the minimum number of signers
+  /// @param numSigners The number of signers who have signed the report
+  /// @param minSigners The minimum number of signers that need to sign a report
+  error InsufficientSigners(uint256 numSigners, uint256 minSigners);
 
   error RepeatedSigner();
 
@@ -23,20 +39,20 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   error InvalidSigner();
 
   uint256 private constant SELECTOR_LENGTH = 4;
-  uint256 private constant REPORT_LENGTH = 64;
+  uint256 public constant REPORT_HEADER_LENGTH = 68;
 
   bool internal s_reentrancyGuard; // guard against reentrancy
 
   /// @notice Contains the signing address of each oracle
   struct OracleSet {
-    bool exists;
     uint8 f; // Number of faulty nodes allowed
     address[] signers;
     mapping(address => uint256) _positions; // 1-indexed to detect unset values
   }
   mapping(bytes4 donId => OracleSet) internal s_configs;
 
-  mapping(bytes32 => address) internal s_reports;
+  // reportId = keccak256(bytes32(receiver) | workflowExecutionId)
+  mapping(bytes32 reportId => address transmitter) internal s_reports;
 
   constructor() ConfirmedOwner(msg.sender) {}
 
@@ -45,11 +61,18 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   // NOTE: we don't inherit OCR2Base since unlike aggregator we only care about signers, not transmitters
   // and the signers don't fetch their config from the forwarder
   function setConfig(bytes4 donId, uint8 f, address[] calldata signers) external nonReentrant {
+    if (f == 0) revert FaultToleranceMustBePositive();
+    if (signers.length > MAX_ORACLES) revert ExcessSigners(signers.length, MAX_ORACLES);
+    if (signers.length <= 3 * f) revert InsufficientSigners(signers.length, 3 * f + 1);
+
     // TODO: how does setConfig handle expiration? e.g. if the signer set changes
 
     // remove any old signer addresses
+    for (uint256 i = 0; i < s_configs[donId].signers.length; ++i) {
+      address signer = s_configs[donId].signers[i];
+      delete s_configs[donId]._positions[signer];
+    }
     delete s_configs[donId];
-    s_configs[donId].exists = true;
     s_configs[donId].signers = signers;
 
     // add new signer addresses
@@ -63,13 +86,13 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     s_configs[donId].f = f;
   }
 
-  // send a report to targetAddress
+  // send a report to receiver
   function report(
-    address targetAddress,
+    address receiver,
     bytes calldata data,
     bytes[] calldata signatures
   ) external nonReentrant returns (bool) {
-    if (data.length < SELECTOR_LENGTH + REPORT_LENGTH) {
+    if (data.length < SELECTOR_LENGTH + Utils.REPORT_HEADER_LENGTH) {
       revert InvalidData(data);
     }
 
@@ -83,7 +106,8 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       revert WrongNumberOfSignatures();
     }
 
-    if (!s_configs[donId].exists) revert InvalidDonId();
+    // f can never be 0, so this means the config doesn't actually exist
+    if (s_configs[donId].f == 0) revert InvalidDonId();
 
     bytes32 hash = keccak256(rawReport);
 
@@ -104,21 +128,29 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       signed[index] = signer;
     }
 
-    // report was already processed
-    if (s_reports[workflowExecutionId] != address(0)) {
+    // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
+    bytes32 reportId = _reportId(receiver, workflowExecutionId);
+    if (s_reports[reportId] != address(0)) {
+      // report was already processed
       return false;
     }
 
     // solhint-disable-next-line avoid-low-level-calls
-    (bool success, bytes memory result) = targetAddress.call(data);
+    (bool success, bytes memory result) = receiver.call(data);
 
-    s_reports[workflowExecutionId] = msg.sender;
+    s_reports[reportId] = msg.sender;
     return true;
   }
 
+  function _reportId(address receiver, bytes32 workflowExecutionId) internal pure returns (bytes32) {
+    // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
+    return keccak256(bytes.concat(bytes32(uint256(uint160(receiver))), workflowExecutionId));
+  }
+
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
-  function getTransmitter(bytes32 workflowExecutionId) external view returns (address) {
-    return s_reports[workflowExecutionId];
+  function getTransmitter(address receiver, bytes32 workflowExecutionId) external view returns (address) {
+    bytes32 reportId = _reportId(receiver, workflowExecutionId);
+    return s_reports[reportId];
   }
 
   /// @inheritdoc TypeAndVersionInterface
