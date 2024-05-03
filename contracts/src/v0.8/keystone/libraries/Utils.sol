@@ -3,7 +3,7 @@ pragma solidity ^0.8.19;
 
 // solhint-disable gas-custom-errors
 library Utils {
-  uint256 public constant REPORT_HEADER_LENGTH = 68;
+  uint256 public constant REPORT_HEADER_LENGTH = 100;
 
   // solhint-disable avoid-low-level-calls, chainlink-solidity/explicit-returns
   function _splitSignature(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
@@ -33,13 +33,14 @@ library Utils {
   // solhint-disable avoid-low-level-calls, chainlink-solidity/explicit-returns
   function _splitReport(
     bytes memory rawReport
-  ) internal pure returns (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId) {
-    require(rawReport.length > 68, "invalid report length");
+  ) internal pure returns (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowSigner) {
+    require(rawReport.length > REPORT_HEADER_LENGTH, "invalid report length");
     assembly {
       // skip first 32 bytes, contains length of the report
       workflowId := mload(add(rawReport, 32))
       donId := mload(add(rawReport, 64))
       workflowExecutionId := mload(add(rawReport, 68))
+      workflowSigner := mload(add(rawReport, 100))
     }
   }
 }

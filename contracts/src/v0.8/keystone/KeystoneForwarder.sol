@@ -2,6 +2,7 @@
 pragma solidity ^0.8.19;
 
 import {IForwarder} from "./interfaces/IForwarder.sol";
+import {IReceiver} from "./interfaces/IReceiver.sol";
 import {ConfirmedOwner} from "../shared/access/ConfirmedOwner.sol";
 import {TypeAndVersionInterface} from "../interfaces/TypeAndVersionInterface.sol";
 import {Utils} from "./libraries/Utils.sol";
@@ -10,35 +11,33 @@ import {Utils} from "./libraries/Utils.sol";
 contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterface {
   error ReentrantCall();
 
-  /// @notice This error is returned when the data with report is invalid.
-  /// This can happen if the data is shorter than SELECTOR_LENGTH + REPORT_HEADER_LENGTH.
-  /// @param data the data that was received
-  error InvalidData(bytes data);
+  /// @notice This error is returned when the report data is invalid.
+  /// This can happen if the data is shorter than REPORT_HEADER_LENGTH.
+  error InvalidReport();
 
   /// @notice This error is thrown whenever trying to set a config
   /// with a fault tolerance of 0
   error FaultToleranceMustBePositive();
 
-  /// @notice This error is thrown whenever a report is signed
-  /// with more than the max number of signers
+  /// @notice This error is thrown whenever configuration provides
+  /// more signers than the maximum allowed number
   /// @param numSigners The number of signers who have signed the report
   /// @param maxSigners The maximum number of signers that can sign a report
   error ExcessSigners(uint256 numSigners, uint256 maxSigners);
 
-  /// @notice This error is thrown whenever a report is signed
+  /// @notice This error is thrown whenever a configuration is provided
   /// with less than the minimum number of signers
-  /// @param numSigners The number of signers who have signed the report
-  /// @param minSigners The minimum number of signers that need to sign a report
+  /// @param numSigners The number of signers provided
+  /// @param minSigners The minimum number of signers expected
   error InsufficientSigners(uint256 numSigners, uint256 minSigners);
 
-  error RepeatedSigner();
+  error DuplicateSigner();
 
-  error WrongNumberOfSignatures();
+  error WrongNumberOfSignatures(uint256 expected, uint256 received);
 
-  error InvalidDonId();
-  error InvalidSigner();
-
-  uint256 private constant SELECTOR_LENGTH = 4;
+  error InvalidDonId(bytes4 donId);
+  error InvalidSigner(address signer);
+  error ReportAlreadyProcessed();
 
   bool internal s_reentrancyGuard; // guard against reentrancy
 
@@ -50,15 +49,15 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   }
   mapping(bytes4 donId => OracleSet) internal s_configs;
 
-  // reportId = keccak256(bytes20(receiver) | selector | workflowExecutionId)
+  // reportId = keccak256(bytes20(receiver) | workflowOwner | workflowExecutionId)
   mapping(bytes32 reportId => address transmitter) internal s_reports;
+
+  event ReportDelivered(address indexed receiver, bytes32 indexed workflowOwner, bytes32 indexed workflowExecutionId, bool result);
 
   constructor() ConfirmedOwner(msg.sender) {}
 
   uint256 internal constant MAX_ORACLES = 31;
 
-  // NOTE: we don't inherit OCR2Base since unlike aggregator we only care about signers, not transmitters
-  // and the signers don't fetch their config from the forwarder
   function setConfig(bytes4 donId, uint8 f, address[] calldata signers) external nonReentrant {
     if (f == 0) revert FaultToleranceMustBePositive();
     if (signers.length > MAX_ORACLES) revert ExcessSigners(signers.length, MAX_ORACLES);
@@ -71,89 +70,86 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       address signer = s_configs[donId].signers[i];
       delete s_configs[donId]._positions[signer];
     }
-    s_configs[donId].signers = signers;
 
     // add new signer addresses
+    s_configs[donId].signers = signers;
     for (uint256 i = 0; i < signers.length; ++i) {
       // assign indices, detect duplicates
       address signer = signers[i];
-      if(s_configs[donId]._positions[signer] != 0) revert RepeatedSigner();
+      if(s_configs[donId]._positions[signer] != 0) revert DuplicateSigner();
       s_configs[donId]._positions[signer] = uint8(i) + 1;
       s_configs[donId].signers.push(signer);
     }
     s_configs[donId].f = f;
   }
 
-  function getSelector(bytes memory _data) private pure returns(bytes4 sig) {
-      assembly {
-          sig := mload(add(_data, 32))
-      }
-  }
-
   // send a report to receiver
   function report(
-    address receiver,
-    bytes calldata data,
+    address receiverAddress,
+    bytes calldata rawReport,
     bytes[] calldata signatures
-  ) external nonReentrant returns (bool) {
-    if (data.length < SELECTOR_LENGTH + Utils.REPORT_HEADER_LENGTH) {
-      revert InvalidData(data);
+  ) external nonReentrant {
+    if (rawReport.length < Utils.REPORT_HEADER_LENGTH) {
+      revert InvalidReport();
     }
 
-    // data is an encoded call with the selector prefixed: (bytes4 selector, bytes report, ...)
-    // we are able to partially decode just the first param, since we don't know the rest
-    bytes4 selector = getSelector(data);
-    bytes memory rawReport = abi.decode(data[4:], (bytes));
+    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowOwner) = Utils._splitReport(rawReport);
 
-    (/* bytes32 workflowId */, bytes4 donId, bytes32 workflowExecutionId) = Utils._splitReport(rawReport);
-
-    if (signatures.length != s_configs[donId].f + 1) {
-      revert WrongNumberOfSignatures();
+    uint256 expectedSignatures = s_configs[donId].f + 1;
+    if (signatures.length != expectedSignatures) {
+      revert WrongNumberOfSignatures(expectedSignatures, signatures.length);
     }
 
     // f can never be 0, so this means the config doesn't actually exist
-    if (s_configs[donId].f == 0) revert InvalidDonId();
+    if (s_configs[donId].f == 0) revert InvalidDonId(donId);
 
-    bytes32 hash = keccak256(rawReport);
-
-    // validate signatures
-    address[MAX_ORACLES] memory signed;
-    uint8 index = 0;
-    for (uint256 i = 0; i < signatures.length; i++) {
-      // TODO: is libocr-style multiple bytes32 arrays more optimal, gas-wise?
-      (bytes32 r, bytes32 s, uint8 v) = Utils._splitSignature(signatures[i]);
-      address signer = ecrecover(hash, v, r, s);
-
-      // validate signer is trusted and signature is unique
-      index = uint8(s_configs[donId]._positions[signer]);
-      if (index == 0) revert InvalidSigner(); // index is 1-indexed so we can detect unset signers
-      index -= 1;
-      if(signed[index] != address(0)) revert RepeatedSigner();
-      signed[index] = signer;
-    }
-
-    bytes32 reportId = _reportId(receiver, selector, workflowExecutionId);
+    bytes32 reportId = _reportId(receiverAddress, workflowOwner, workflowExecutionId);
 
     if (s_reports[reportId] != address(0)) {
-      // report was already processed
-      return false;
+      revert ReportAlreadyProcessed();
     }
 
-    // solhint-disable-next-line avoid-low-level-calls
-    (bool success, bytes memory result) = receiver.call(data);
+    // validate signatures
+    {
+      bytes32 hash = keccak256(rawReport);
+
+      address[MAX_ORACLES] memory signed;
+      uint8 index = 0;
+      for (uint256 i = 0; i < signatures.length; i++) {
+        // TODO: is libocr-style multiple bytes32 arrays more optimal, gas-wise?
+        (bytes32 r, bytes32 s, uint8 v) = Utils._splitSignature(signatures[i]);
+        address signer = ecrecover(hash, v, r, s);
+
+        // validate signer is trusted and signature is unique
+        index = uint8(s_configs[donId]._positions[signer]);
+        if (index == 0) revert InvalidSigner(signer); // index is 1-indexed so we can detect unset signers
+        index -= 1;
+        if(signed[index] != address(0)) revert DuplicateSigner();
+        signed[index] = signer;
+      }
+    }
+
+    IReceiver receiver = IReceiver(receiverAddress);
+    bool success;
+    try receiver.onReport(workflowId, workflowOwner, rawReport[Utils.REPORT_HEADER_LENGTH:]) {
+      success = true;
+    } catch {
+      success = false;
+    }
 
     s_reports[reportId] = msg.sender;
-    return true;
+
+    emit ReportDelivered(receiverAddress, workflowOwner, workflowExecutionId, success);
   }
 
-  function _reportId(address receiver, bytes4 selector, bytes32 workflowExecutionId) internal pure returns (bytes32) {
+  function _reportId(address receiver, bytes32 workflowOwner, bytes32 workflowExecutionId) internal pure returns (bytes32) {
     // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
-    return keccak256(bytes.concat(bytes20(uint160(receiver)), selector, workflowExecutionId));
+    return keccak256(bytes.concat(bytes20(uint160(receiver)), workflowOwner, workflowExecutionId));
   }
 
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
-  function getTransmitter(address receiver, bytes4 selector, bytes32 workflowExecutionId) external view returns (address) {
-    bytes32 reportId = _reportId(receiver, selector, workflowExecutionId);
+  function getTransmitter(address receiver, bytes32 workflowOwner, bytes32 workflowExecutionId) external view returns (address) {
+    bytes32 reportId = _reportId(receiver, workflowOwner, workflowExecutionId);
     return s_reports[reportId];
   }
 
