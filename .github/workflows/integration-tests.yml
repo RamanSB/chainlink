@@ -348,7 +348,7 @@ jobs:
   #         logstreamLogTargets: ${{ vars.LOGSTREAM_LOG_TARGETS }}
   #         grafanaUrl: "http://localhost:8080/primary"
   #         grafanaDashboardUrl: "/d/ddf75041-1e39-42af-aa46-361fe4c36e9e/ci-e2e-tests-logs"
-  #         grafanaBearerToken: ${{ secrets.GRAFANA_TEST_TOKEN }}
+  #         grafanaBearerToken: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
 
   #     ## Run this step when changes that require tests to be run are made
   #     - name: Run Tests
@@ -465,7 +465,7 @@ jobs:
   #         logstreamLogTargets: ${{ vars.LOGSTREAM_LOG_TARGETS }}
   #         grafanaUrl: "http://localhost:8080/primary"
   #         grafanaDashboardUrl: "/d/ddf75041-1e39-42af-aa46-361fe4c36e9e/ci-e2e-tests-logs"
-  #         grafanaBearerToken: ${{ secrets.GRAFANA_TEST_TOKEN }}
+  #         grafanaBearerToken: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
   #     ## Run this step when changes that require tests to be run are made
   #     - name: Run Tests
   #       if: needs.changes.outputs.src == 'true'
@@ -677,7 +677,7 @@ jobs:
         shell: bash
         run: |
           # send requests to http://localhost:8080/primary/<grafana endpoint>
-          curl "http://localhost:8080/primary/api/search?limit=1&page=1" -H "Authorization: Bearer ${{ secrets.GRAFANA_TEST_TOKEN }}"
+          curl "http://localhost:8080/primary/api/search?limit=1&page=1" -H "Authorization: Bearer ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}"
       - name: Prepare Base64 TOML override
         uses: ./.github/actions/setup-create-base64-config
         with:
@@ -695,7 +695,7 @@ jobs:
           logstreamLogTargets: ${{ vars.LOGSTREAM_LOG_TARGETS }}
           grafanaUrl: "http://localhost:8080/primary"
           grafanaDashboardUrl: "/d/ddf75041-1e39-42af-aa46-361fe4c36e9e/ci-e2e-tests-logs"
-          grafanaBearerToken: ${{ secrets.GRAFANA_TEST_TOKEN }}
+          grafanaBearerToken: ${{ secrets.GRAFANA_INTERNAL_BASIC_AUTH }}
       ## Run this step when changes that require tests to be run are made
       - name: Run Tests
         if: needs.changes.outputs.src == 'true' || github.event_name == 'workflow_dispatch'
