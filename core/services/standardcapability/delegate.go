@@ -8,22 +8,28 @@ import (
 	"github.com/pelletier/go-toml"
 	"github.com/pkg/errors"
 
+	"github.com/smartcontractkit/chainlink-common/pkg/capabilities"
 	"github.com/smartcontractkit/chainlink-common/pkg/loop"
+	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	"github.com/smartcontractkit/chainlink-common/pkg/types/core"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+	"github.com/smartcontractkit/chainlink/v2/core/services/ocr2/plugins/generic"
+	"github.com/smartcontractkit/chainlink/v2/core/services/telemetry"
 	"github.com/smartcontractkit/chainlink/v2/plugins"
 )
 
 type Delegate struct {
-	logger   logger.Logger
-	registry core.CapabilitiesRegistry
-	cfg      plugins.RegistrarConfig
+	logger                logger.Logger
+	ds                    sqlutil.DataSource
+	registry              core.CapabilitiesRegistry
+	cfg                   plugins.RegistrarConfig
+	monitoringEndpointGen telemetry.MonitoringEndpointGenerator
 }
 
-func NewDelegate(logger logger.Logger, registry core.CapabilitiesRegistry,
-	cfg plugins.RegistrarConfig) *Delegate {
-	return &Delegate{logger: logger, registry: registry, cfg: cfg}
+func NewDelegate(logger logger.Logger, ds sqlutil.DataSource, registry core.CapabilitiesRegistry,
+	cfg plugins.RegistrarConfig, monitoringEndpointGen telemetry.MonitoringEndpointGenerator) *Delegate {
+	return &Delegate{logger: logger, ds: ds, registry: registry, cfg: cfg, monitoringEndpointGen: monitoringEndpointGen}
 }
 
 func (d Delegate) JobType() job.Type {
@@ -32,63 +38,81 @@ func (d Delegate) JobType() job.Type {
 
 func (d Delegate) BeforeJobCreated(job job.Job) {}
 
-func (d Delegate) ServicesForSpec(ctx context.Context, job job.Job) ([]job.ServiceCtx, error) {
+func (d Delegate) ServicesForSpec(ctx context.Context, jb job.Job) ([]job.ServiceCtx, error) {
 
-	// Startup the binary here - how does this work for the existing median plugin etc?
+	log := d.logger.Named("StandardCapability").Named(jb.StandardCapabilitySpec.GetID())
 
-	log := d.logger.Named("StandardCapability").Named("name from config")
-	var envVars []string
-	cmdName := "go run /Users/matthewpendrey/Projects/chainlink/core/services/standardcapability/test/simplestandardcapability.go" // get a better version of this from the test code
+	cmdName := jb.StandardCapabilitySpec.BinaryUrl
+
+	// TEMP override
+	cmdName = "/Users/matthewpendrey/Projects/chainlink/core/services/standardcapability/simpletriggercapability/simpletriggercapability" // get a better version of this from the test code
 
 	cmdFn, opts, err := d.cfg.RegisterLOOP(plugins.CmdConfig{
 		ID:  log.Name(),
 		Cmd: cmdName,
-		Env: envVars,
+		Env: nil,
 	})
 
 	if err != nil {
 		return nil, fmt.Errorf("error registering loop: %v", err)
 	}
 
-	scs := loop.NewStandardCapabilityService(log, opts, cmdFn)
+	capabilityLoop := loop.NewStandardCapability(log, opts, cmdFn)
 
-	capabilityID, err := scs.Service.NewStandardCapability(ctx, "", 0, 0, 0, 0, 0, 0)
+	// TODO Move the below into service context
+
+	err = capabilityLoop.Start(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error starting standard capability service: %v", err)
+	}
+
+	err = capabilityLoop.WaitCtx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error waiting for standard capability service to start: %v", err)
+	}
+
+	info, err := capabilityLoop.Service.Info(ctx)
+
+	d.logger.Info("Standard capability service", "info", info)
+
+	if err != nil {
+		return nil, fmt.Errorf("error getting standard capability service info: %v", err)
+	}
+
+	kvStore := job.NewKVStore(jb.ID, d.ds, log)
+	telemetryService := generic.NewTelemetryAdapter(d.monitoringEndpointGen)
+
+	err = capabilityLoop.Service.Initialise(ctx, jb.StandardCapabilitySpec.CapabilityConfig, telemetryService, kvStore, d.registry)
+	if err != nil {
+		return nil, fmt.Errorf("error initialising standard capability service: %v", err)
+	}
+
+	//  temp test for now to test registration and communication with the capability
+
+	capability, err := d.registry.GetTrigger(ctx, "SIMPLETRIGGERCAPABILITY")
+	if err != nil {
+		return nil, fmt.Errorf("error getting action capability: %v", err)
+	}
+
+	resultCh, err := capability.RegisterTrigger(ctx, capabilities.CapabilityRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("error creating standard capability: %v", err)
 	}
 
-	fmt.Printf("Created standard capability with id %d\n", capabilityID)
+	for resp := range resultCh {
+		fmt.Printf("Got response from standard capability: %v\n", resp.Value)
+	}
 
-	//here - now that the job configuration has been added, shoujld be able to configure and run a job
+	// closing logic is cleaning up resources as expected
+	err = capabilityLoop.Close()
+	if err != nil {
+		return nil, fmt.Errorf("error closing standard capability service: %v", err)
+	}
 
-	// Create a client to the capability, and register it with the registry, where does the proxying happen?
+	// end of temp test
 
-	/*
-		d.registry.Add(ctx, capability)
-
-		median := loop.NewMedianService(lggr, telem, cmdFn, medianProvider, dataSource, juelsPerFeeCoinSource, errorLog)
-		argsNoPlugin.ReportingPluginFactory = median
-		srvs = append(srvs, median)
-
-		// see this-> if cmdName := env.MedianPlugin.Cmd.Get(); cmdName != "" {
-
-		//1 start up the binary assume it's a loop binary
-
-		// wait for startup by listening to the loop registry? then wire up dependencies by passing over service ids to the loop binary? or is there a different way
-		// that services are passed to the loop binary?
-
-		// register the capability with the capability registry
-
-		// return a service context  to enable shutdown
-
-		// So approach is to create a bare bones impl for the above, then figure out how to configure the core to test it
-
-		// After all this is done and tested, need to figure out how the binary will be deployed and loaded in practise.
-
-		d.registry.
-
-	*/
-	return nil, nil
+	// TODO Move initialisation into the service context
+	return []job.ServiceCtx{capabilityLoop}, nil
 }
 
 func (d Delegate) AfterJobCreated(job job.Job) {}
@@ -120,6 +144,8 @@ func ValidatedStandardCapabilitySpec(tomlString string) (job.Job, error) {
 	if jb.Type != job.StandardCapability {
 		return jb, errors.Errorf("standard capability unsupported job type %s", jb.Type)
 	}
+
+	// TODO other validation
 
 	return jb, nil
 }
