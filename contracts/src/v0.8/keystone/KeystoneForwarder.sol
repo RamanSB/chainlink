@@ -49,8 +49,13 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   }
   mapping(bytes4 donId => OracleSet) internal s_configs;
 
+  struct DeliveryStatus {
+    address transmitter;
+    bool success;
+  }
+
   // reportId = keccak256(bytes20(receiver) | workflowOwner | workflowExecutionId)
-  mapping(bytes32 reportId => address transmitter) internal s_reports;
+  mapping(bytes32 reportId => DeliveryStatus status) internal s_reports;
 
   event ReportDelivered(address indexed receiver, bytes32 indexed workflowOwner, bytes32 indexed workflowExecutionId, bool result);
 
@@ -105,7 +110,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
     bytes32 reportId = _reportId(receiverAddress, workflowOwner, workflowExecutionId);
 
-    if (s_reports[reportId] != address(0)) {
+    if (s_reports[reportId].transmitter != address(0)) {
       revert ReportAlreadyProcessed();
     }
 
@@ -137,7 +142,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       success = false;
     }
 
-    s_reports[reportId] = msg.sender;
+    s_reports[reportId] = DeliveryStatus(msg.sender, success);
 
     emit ReportDelivered(receiverAddress, workflowOwner, workflowExecutionId, success);
   }
@@ -150,7 +155,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
   function getTransmitter(address receiver, bytes32 workflowOwner, bytes32 workflowExecutionId) external view returns (address) {
     bytes32 reportId = _reportId(receiver, workflowOwner, workflowExecutionId);
-    return s_reports[reportId];
+    return s_reports[reportId].transmitter;
   }
 
   /// @inheritdoc TypeAndVersionInterface
