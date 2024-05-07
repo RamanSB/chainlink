@@ -73,7 +73,6 @@ func TestEvmWrite(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte{0x1, 0x2, 0x3}, payload["data"])
 		require.Equal(t, [][]byte{}, payload["signatures"])
-
 	})
 
 	ch, err := capability.Execute(ctx, req)
