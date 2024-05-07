@@ -33,14 +33,14 @@ library Utils {
   // solhint-disable avoid-low-level-calls, chainlink-solidity/explicit-returns
   function _splitReport(
     bytes memory rawReport
-  ) internal pure returns (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowSigner) {
+  ) internal pure returns (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowOwner) {
     require(rawReport.length > REPORT_HEADER_LENGTH, "invalid report length");
     assembly {
       // skip first 32 bytes, contains length of the report
       workflowId := mload(add(rawReport, 32))
       donId := mload(add(rawReport, 64))
       workflowExecutionId := mload(add(rawReport, 68))
-      workflowSigner := mload(add(rawReport, 100))
+      workflowOwner := mload(add(rawReport, 100))
     }
   }
 }
