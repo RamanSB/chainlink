@@ -19,6 +19,9 @@ mkShell' {
 
     python3
     python3Packages.pip
+    protobuf
+    protoc-gen-go
+    protoc-gen-go-grpc
 
     curl
     nodejs
