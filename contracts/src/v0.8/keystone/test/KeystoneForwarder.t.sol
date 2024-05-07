@@ -7,7 +7,7 @@ import "../KeystoneForwarder.sol";
 import "./mocks/Receiver.sol";
 
 contract KeystoneForwarderTest is Test {
-  function test_abi_partial_decoding_works() public {
+  function test_abi_partial_decoding_works() public pure {
     bytes memory report = hex"0102";
     uint256 amount = 1;
     bytes memory payload = abi.encode(report, amount);
@@ -57,7 +57,51 @@ contract KeystoneForwarderTest is Test {
     return signatures;
   }
 
-  function test_it_works() public {
+  function test_set_config() public {
+    KeystoneForwarder forwarder = new KeystoneForwarder();
+
+    // generate signers
+    setUp();
+
+    // configure contract with signers
+    uint8 f = 1;
+    bytes4 donId = 0x01020304;
+
+    // f must be non-zero
+    {
+      address[] memory signers = _getSignerAddresses();
+
+      vm.expectRevert(KeystoneForwarder.FaultToleranceMustBePositive.selector);
+      forwarder.setConfig(donId, 0, signers);
+    }
+
+    // must provide enough signers
+    {
+      address[] memory signers = new address[](1);
+
+      vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.InsufficientSigners.selector, 1, 4));
+      forwarder.setConfig(donId, f, signers);
+    }
+
+    // can't have too many signers
+    {
+      address[] memory signers = new address[](64);
+
+      vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.ExcessSigners.selector, 64, 31));
+      forwarder.setConfig(donId, f, signers);
+    }
+
+    // set config doesn't allow duplicate signers
+    {
+      address[] memory signers = _getSignerAddresses();
+      signers[1] = signers[0];
+
+      vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
+      forwarder.setConfig(donId, f, signers);
+    }
+  }
+
+  function test_report() public {
     KeystoneForwarder forwarder = new KeystoneForwarder();
     Receiver receiver = new Receiver();
 
@@ -69,15 +113,6 @@ contract KeystoneForwarderTest is Test {
     bytes4 donId = 0x01020304;
     {
       address[] memory signers = _getSignerAddresses();
-      forwarder.setConfig(donId, f, signers);
-    }
-
-    // set config doesn't allow duplicate signers
-    {
-      address[] memory signers = _getSignerAddresses();
-      signers[1] = signers[0];
-
-      vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
       forwarder.setConfig(donId, f, signers);
     }
 
@@ -132,9 +167,18 @@ contract KeystoneForwarderTest is Test {
     }
 
     {
-    // TODO; this triggers report already processed first, need a new clean report
       // doesn't allow duplicate signers
-      signatures[1] = signatures[0];
+
+      // generate a clean report so we don't trigger ReportAlreadyProcessed
+      bytes32 executionId = hex"6d795f657865637574696f6e5f69640000000000000000000000000000000001";
+      rawReports = abi.encode(mercuryReports);
+      report = abi.encodePacked(workflowId, donId, executionId, workflowOwner, rawReports);
+
+      // generate signatures
+      signatures = _generateSignatures(report, numSignatures);
+
+      signatures[1] = signatures[0]; // repeat a signature
+
       vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
       forwarder.report(address(receiver), report, signatures);
     }
