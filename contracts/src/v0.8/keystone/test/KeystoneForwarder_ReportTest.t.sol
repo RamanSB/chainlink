@@ -6,7 +6,7 @@ import "forge-std/Test.sol";
 import "../KeystoneForwarder.sol";
 import "./mocks/Receiver.sol";
 
-contract KeystoneForwarderTest is Test {
+contract KeystoneForwarder_ReportTest is Test {
   function test_abi_partial_decoding_works() public pure {
     bytes memory report = hex"0102";
     uint256 amount = 1;
@@ -57,48 +57,34 @@ contract KeystoneForwarderTest is Test {
     return signatures;
   }
 
-  function test_set_config() public {
+  function test_RevertWhen_ReportHasDuplicateSignatures() public {
     KeystoneForwarder forwarder = new KeystoneForwarder();
 
-    // generate signers
-    setUp();
-
-    // configure contract with signers
     uint8 f = 1;
     bytes4 donId = 0x01020304;
+    address[] memory signers = _getSignerAddresses();
+    forwarder.setConfig(donId, f, signers);
 
-    // f must be non-zero
-    {
-      address[] memory signers = _getSignerAddresses();
+    uint256 numSignatures = f + 1;
+    bytes32 workflowId = hex"6d795f6964000000000000000000000000000000000000000000000000000000";
+    bytes32 workflowOwner = hex"aabb5f657865637574696f6e5f69640000000000000000000000000000000000";
+    bytes32 executionId = hex"6d795f657865637574696f6e5f69640000000000000000000000000000000000";
+    bytes[] memory mercuryReports = new bytes[](2);
+    mercuryReports[0] = hex"010203";
+    mercuryReports[1] = hex"aabbccdd";
+    bytes memory rawReports = abi.encode(mercuryReports);
+    bytes memory report = abi.encodePacked(workflowId, donId, executionId, workflowOwner, rawReports);
 
-      vm.expectRevert(KeystoneForwarder.FaultToleranceMustBePositive.selector);
-      forwarder.setConfig(donId, 0, signers);
-    }
+    rawReports = abi.encode(mercuryReports);
+    report = abi.encodePacked(workflowId, donId, executionId, workflowOwner, rawReports);
 
-    // must provide enough signers
-    {
-      address[] memory signers = new address[](1);
+    // generate signatures
+    bytes[] memory signatures = _generateSignatures(report, numSignatures);
+    signatures[1] = signatures[0]; // repeat a signature
 
-      vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.InsufficientSigners.selector, 1, 4));
-      forwarder.setConfig(donId, f, signers);
-    }
-
-    // can't have too many signers
-    {
-      address[] memory signers = new address[](64);
-
-      vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.ExcessSigners.selector, 64, 31));
-      forwarder.setConfig(donId, f, signers);
-    }
-
-    // set config doesn't allow duplicate signers
-    {
-      address[] memory signers = _getSignerAddresses();
-      signers[1] = signers[0];
-
-      vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
-      forwarder.setConfig(donId, f, signers);
-    }
+    Receiver receiver = new Receiver();
+    vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
+    forwarder.report(address(receiver), report, signatures);
   }
 
   function test_report() public {
