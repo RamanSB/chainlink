@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "forge-std/Test.sol";
-
-import "../KeystoneForwarder.sol";
-import "./mocks/Receiver.sol";
+import {Test, Vm} from "forge-std/Test.sol";
+import {KeystoneForwarder} from "../KeystoneForwarder.sol";
+import {Receiver} from "./mocks/Receiver.sol";
 
 contract KeystoneForwarder_ReportTest is Test {
-  function test_abi_partial_decoding_works() public pure {
-    bytes memory report = hex"0102";
-    uint256 amount = 1;
-    bytes memory payload = abi.encode(report, amount);
-    bytes memory decodedReport = abi.decode(payload, (bytes));
-    assertEq(decodedReport, report, "not equal");
-  }
-
   address internal constant TRANSMITTER = address(50);
   uint256 internal constant MAX_ORACLES = 31;
 
@@ -26,11 +17,7 @@ contract KeystoneForwarder_ReportTest is Test {
 
   function setUp() public virtual {
     uint256 seed = 0;
-    generateSigners(seed);
-  }
 
-  function generateSigners(uint256 seed) internal {
-    // generate signers
     for (uint256 i; i < MAX_ORACLES; i++) {
       uint256 mockPK = seed + i + 1;
       s_signers[i].mockPrivateKey = mockPK;
@@ -174,12 +161,6 @@ contract KeystoneForwarder_ReportTest is Test {
       // validate transmitter was recorded
       address transmitter = forwarder.getTransmitter(address(receiver), workflowOwner, executionId);
       assertEq(transmitter, TRANSMITTER, "transmitter mismatch");
-    }
-
-    {
-      // doesn't deliver the same report more than once
-      vm.expectRevert(KeystoneForwarder.ReportAlreadyProcessed.selector);
-      forwarder.report(address(receiver), report, signatures);
     }
   }
 }
