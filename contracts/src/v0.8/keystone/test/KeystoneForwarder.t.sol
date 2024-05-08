@@ -158,11 +158,5 @@ contract KeystoneForwarderTest is Test {
       address transmitter = forwarder.getTransmitter(address(receiver), workflowOwner, executionId);
       assertEq(transmitter, TRANSMITTER, "transmitter mismatch");
     }
-
-    {
-      // doesn't deliver the same report more than once
-      vm.expectRevert(KeystoneForwarder.ReportAlreadyProcessed.selector);
-      forwarder.report(address(receiver), report, signatures);
-    }
   }
 }

@@ -87,6 +87,37 @@ contract KeystoneForwarder_ReportTest is Test {
     forwarder.report(address(receiver), report, signatures);
   }
 
+  function test_RevertWhen_ReportAlreadyProcessed() public {
+    KeystoneForwarder forwarder = new KeystoneForwarder();
+
+    uint8 f = 1;
+    bytes4 donId = 0x01020304;
+    address[] memory signers = _getSignerAddresses();
+    forwarder.setConfig(donId, f, signers);
+
+    uint256 numSignatures = f + 1;
+    bytes32 workflowId = hex"6d795f6964000000000000000000000000000000000000000000000000000000";
+    bytes32 workflowOwner = hex"aabb5f657865637574696f6e5f69640000000000000000000000000000000000";
+    bytes32 executionId = hex"6d795f657865637574696f6e5f69640000000000000000000000000000000000";
+    bytes[] memory mercuryReports = new bytes[](2);
+    mercuryReports[0] = hex"010203";
+    mercuryReports[1] = hex"aabbccdd";
+    bytes memory rawReports = abi.encode(mercuryReports);
+    bytes memory report = abi.encodePacked(workflowId, donId, executionId, workflowOwner, rawReports);
+
+    rawReports = abi.encode(mercuryReports);
+    report = abi.encodePacked(workflowId, donId, executionId, workflowOwner, rawReports);
+
+    // generate signatures
+    bytes[] memory signatures = _generateSignatures(report, numSignatures);
+
+    Receiver receiver = new Receiver();
+    forwarder.report(address(receiver), report, signatures);
+
+    vm.expectRevert(KeystoneForwarder.ReportAlreadyProcessed.selector);
+    forwarder.report(address(receiver), report, signatures);
+  }
+
   function test_report() public {
     KeystoneForwarder forwarder = new KeystoneForwarder();
     Receiver receiver = new Receiver();
