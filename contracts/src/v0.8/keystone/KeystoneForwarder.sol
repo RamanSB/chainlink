@@ -35,7 +35,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
   error WrongNumberOfSignatures(uint256 expected, uint256 received);
 
-  error InvalidDonId(bytes4 donId);
+  error InvalidDonId(uint32 donId);
   error InvalidSigner(address signer);
   error ReportAlreadyProcessed();
 
@@ -47,7 +47,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     address[] signers;
     mapping(address => uint256) _positions; // 1-indexed to detect unset values
   }
-  mapping(bytes4 donId => OracleSet) internal s_configs;
+  mapping(uint32 donId => OracleSet) internal s_configs;
 
   struct DeliveryStatus {
     address transmitter;
@@ -57,13 +57,18 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   // reportId = keccak256(bytes20(receiver) | workflowOwner | workflowExecutionId)
   mapping(bytes32 reportId => DeliveryStatus status) internal s_reports;
 
-  event ReportDelivered(address indexed receiver, bytes32 indexed workflowOwner, bytes32 indexed workflowExecutionId, bool result);
+  event ReportDelivered(
+    address indexed receiver,
+    bytes32 indexed workflowOwner,
+    bytes32 indexed workflowExecutionId,
+    bool result
+  );
 
   constructor() ConfirmedOwner(msg.sender) {}
 
   uint256 internal constant MAX_ORACLES = 31;
 
-  function setConfig(bytes4 donId, uint8 f, address[] calldata signers) external nonReentrant {
+  function setConfig(uint32 donId, uint8 f, address[] calldata signers) external nonReentrant {
     if (f == 0) revert FaultToleranceMustBePositive();
     if (signers.length > MAX_ORACLES) revert ExcessSigners(signers.length, MAX_ORACLES);
     if (signers.length <= 3 * f) revert InsufficientSigners(signers.length, 3 * f + 1);
@@ -81,7 +86,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     for (uint256 i = 0; i < signers.length; ++i) {
       // assign indices, detect duplicates
       address signer = signers[i];
-      if(s_configs[donId]._positions[signer] != 0) revert DuplicateSigner();
+      if (s_configs[donId]._positions[signer] != 0) revert DuplicateSigner();
       s_configs[donId]._positions[signer] = uint8(i) + 1;
       s_configs[donId].signers.push(signer);
     }
@@ -98,11 +103,14 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       revert InvalidReport();
     }
 
-    (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowOwner) = Utils._splitReport(rawReport);
+    (bytes32 workflowId, bytes4 donIdBytes, bytes32 workflowExecutionId, bytes32 workflowOwner) = Utils._splitReport(
+      rawReport
+    );
 
-    uint256 expectedSignatures = s_configs[donId].f + 1;
-    if (signatures.length != expectedSignatures) {
-      revert WrongNumberOfSignatures(expectedSignatures, signatures.length);
+    uint32 donId = uint32(donIdBytes);
+
+    if (signatures.length != s_configs[donId].f + 1) {
+      revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
     }
 
     // f can never be 0, so this means the config doesn't actually exist
@@ -129,7 +137,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
         index = uint8(s_configs[donId]._positions[signer]);
         if (index == 0) revert InvalidSigner(signer); // index is 1-indexed so we can detect unset signers
         index -= 1;
-        if(signed[index] != address(0)) revert DuplicateSigner();
+        if (signed[index] != address(0)) revert DuplicateSigner();
         signed[index] = signer;
       }
     }
@@ -147,13 +155,21 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     emit ReportDelivered(receiverAddress, workflowOwner, workflowExecutionId, success);
   }
 
-  function _reportId(address receiver, bytes32 workflowOwner, bytes32 workflowExecutionId) internal pure returns (bytes32) {
+  function _reportId(
+    address receiver,
+    bytes32 workflowOwner,
+    bytes32 workflowExecutionId
+  ) internal pure returns (bytes32) {
     // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
     return keccak256(bytes.concat(bytes20(uint160(receiver)), workflowOwner, workflowExecutionId));
   }
 
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
-  function getTransmitter(address receiver, bytes32 workflowOwner, bytes32 workflowExecutionId) external view returns (address) {
+  function getTransmitter(
+    address receiver,
+    bytes32 workflowOwner,
+    bytes32 workflowExecutionId
+  ) external view returns (address) {
     bytes32 reportId = _reportId(receiver, workflowOwner, workflowExecutionId);
     return s_reports[reportId].transmitter;
   }
