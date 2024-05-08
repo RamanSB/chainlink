@@ -12,7 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -512,7 +511,7 @@ func (c *SimulatedBackendClient) SuggestGasTipCap(ctx context.Context) (tipCap *
 	return c.client.SuggestGasTipCap(ctx)
 }
 
-func (c *SimulatedBackendClient) Backend() *backends.SimulatedBackend {
+func (c *SimulatedBackendClient) Backend() *simulated.Backend {
 	return c.b
 }
 
