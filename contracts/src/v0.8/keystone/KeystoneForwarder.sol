@@ -5,7 +5,6 @@ import {IForwarder} from "./interfaces/IForwarder.sol";
 import {IReceiver} from "./interfaces/IReceiver.sol";
 import {ConfirmedOwner} from "../shared/access/ConfirmedOwner.sol";
 import {TypeAndVersionInterface} from "../interfaces/TypeAndVersionInterface.sol";
-import {Utils} from "./libraries/Utils.sol";
 
 // solhint-disable gas-custom-errors, no-unused-vars
 contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterface {
@@ -37,6 +36,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
   error InvalidDonId(uint32 donId);
   error InvalidSigner(address signer);
+  error InvalidSignature(bytes signature);
   error ReportAlreadyProcessed();
 
   bool internal s_reentrancyGuard; // guard against reentrancy
@@ -67,6 +67,10 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   constructor() ConfirmedOwner(msg.sender) {}
 
   uint256 internal constant MAX_ORACLES = 31;
+  // 32 bytes for workflowId, 4 bytes for donId, 32 bytes for
+  // workflowExecutionId, 20 bytes for workflowOwner
+  uint256 internal constant REPORT_HEADER_LENGTH = 88;
+  uint256 internal constant SIGNATURE_LENGTH = 65;
 
   function setConfig(uint32 donId, uint8 f, address[] calldata signers) external nonReentrant {
     if (f == 0) revert FaultToleranceMustBePositive();
@@ -99,25 +103,20 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     bytes calldata rawReport,
     bytes[] calldata signatures
   ) external nonReentrant {
-    if (rawReport.length < Utils.REPORT_HEADER_LENGTH) {
+    if (rawReport.length < REPORT_HEADER_LENGTH) {
       revert InvalidReport();
     }
 
-    (bytes32 workflowId, uint32 donId, bytes32 workflowExecutionId, address workflowOwner) = Utils._splitReport(
-      rawReport
-    );
+    (bytes32 workflowId, uint32 donId, bytes32 workflowExecutionId, address workflowOwner) = _getMetadata(rawReport);
 
     // f can never be 0, so this means the config doesn't actually exist
     if (s_configs[donId].f == 0) revert InvalidDonId(donId);
-    if (signatures.length != s_configs[donId].f + 1) {
-      revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
-    }
 
     bytes32 reportId = _reportId(receiverAddress, workflowExecutionId);
+    if (s_reports[reportId].transmitter != address(0)) revert ReportAlreadyProcessed();
 
-    if (s_reports[reportId].transmitter != address(0)) {
-      revert ReportAlreadyProcessed();
-    }
+    if (signatures.length != s_configs[donId].f + 1)
+      revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
 
     // validate signatures
     {
@@ -127,7 +126,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       uint8 index = 0;
       for (uint256 i = 0; i < signatures.length; i++) {
         // TODO: is libocr-style multiple bytes32 arrays more optimal, gas-wise?
-        (bytes32 r, bytes32 s, uint8 v) = Utils._splitSignature(signatures[i]);
+        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signatures[i]);
         address signer = ecrecover(hash, v, r, s);
 
         // validate signer is trusted and signature is unique
@@ -141,7 +140,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
 
     IReceiver receiver = IReceiver(receiverAddress);
     bool success;
-    try receiver.onReport(workflowId, workflowOwner, rawReport[Utils.REPORT_HEADER_LENGTH:]) {
+    try receiver.onReport(workflowId, workflowOwner, rawReport[REPORT_HEADER_LENGTH:]) {
       success = true;
     } catch {
       success = false;
@@ -161,6 +160,45 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   function getTransmitter(address receiver, bytes32 workflowExecutionId) external view returns (address) {
     bytes32 reportId = _reportId(receiver, workflowExecutionId);
     return s_reports[reportId].transmitter;
+  }
+
+  function _splitSignature(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+    if (sig.length != SIGNATURE_LENGTH) revert InvalidSignature(sig);
+
+    assembly {
+      /*
+      First 32 bytes stores the length of the signature
+
+      add(sig, 32) = pointer of sig + 32
+      effectively, skips first 32 bytes of signature
+
+      mload(p) loads next 32 bytes starting at the memory address p into memory
+      */
+
+      // first 32 bytes, after the length prefix
+      r := mload(add(sig, 32))
+      // second 32 bytes
+      s := mload(add(sig, 64))
+      // final byte (first byte of the next 32 bytes)
+      v := byte(0, mload(add(sig, 96)))
+    }
+  }
+
+  function _getMetadata(
+    bytes memory rawReport
+  ) internal pure returns (bytes32 workflowId, uint32 donId, bytes32 workflowExecutionId, address workflowOwner) {
+    assembly {
+      // skip first 32 bytes, contains length of the report
+      // first 32 bytes is the workflowId
+      workflowId := mload(add(rawReport, 32))
+      // next 4 bytes is donId. We shift right by 28 bytes to get the actual value
+      donId := shr(mul(28, 8), mload(add(rawReport, 64)))
+      // next 32 bytes is the workflowExecutionId
+      workflowExecutionId := mload(add(rawReport, 68))
+      // next 20 bytes is the workflowOwner. We shift right by 12 bytes to get
+      // the actual value
+      workflowOwner := shr(mul(12, 8), mload(add(rawReport, 100)))
+    }
   }
 
   /// @inheritdoc TypeAndVersionInterface
