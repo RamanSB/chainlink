@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {Vm} from "forge-std/Test.sol";
 import {BaseTest} from "./KeystoneForwarderBaseTest.t.sol";
 import {KeystoneForwarder} from "../KeystoneForwarder.sol";
 
@@ -34,14 +33,69 @@ contract KeystoneForwarder_ReportTest is BaseTest {
     rawReports = abi.encode(mercuryReports);
     report = abi.encodePacked(workflowId, DON_ID, executionId, workflowOwner, rawReports);
 
-    bytes32 hash = keccak256(report);
-
     for (uint256 i = 0; i < requiredSignaturesNum; i++) {
-      (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signers[i].mockPrivateKey, hash);
+      (uint8 v, bytes32 r, bytes32 s) = vm.sign(s_signers[i].mockPrivateKey, keccak256(report));
       signatures[i] = bytes.concat(r, s, bytes1(v));
     }
 
     vm.startPrank(TRANSMITTER);
+  }
+
+  function test_RevertWhen_ReportHasIncorrectDON() public {
+    uint32 invalidDONId = 111;
+    bytes memory reportWithInvalidDONId = abi.encodePacked(
+      workflowId,
+      invalidDONId,
+      executionId,
+      workflowOwner,
+      rawReports
+    );
+
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.InvalidDonId.selector, invalidDONId));
+    s_forwarder.report(address(s_receiver), reportWithInvalidDONId, signatures);
+  }
+
+  function test_RevertWhen_ReportIsMalformed() public {
+    bytes memory shortenedReport = abi.encode(bytes32(report));
+
+    vm.expectRevert(KeystoneForwarder.InvalidReport.selector);
+    s_forwarder.report(address(s_receiver), shortenedReport, signatures);
+  }
+
+  function test_RevertWhen_TooFewSignatures() public {
+    bytes[] memory fewerSignatures = new bytes[](F);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(KeystoneForwarder.WrongNumberOfSignatures.selector, F + 1, fewerSignatures.length)
+    );
+    s_forwarder.report(address(s_receiver), report, fewerSignatures);
+  }
+
+  function test_RevertWhen_TooManySignatures() public {
+    bytes[] memory moreSignatures = new bytes[](F + 2);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(KeystoneForwarder.WrongNumberOfSignatures.selector, F + 1, moreSignatures.length)
+    );
+    s_forwarder.report(address(s_receiver), report, moreSignatures);
+  }
+
+  function test_RevertWhen_AnySignatureIsInvalid() public {
+    signatures[1] = abi.encode(1234); // invalid signature
+
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.InvalidSignature.selector, signatures[1]));
+    s_forwarder.report(address(s_receiver), report, signatures);
+  }
+
+  function test_RevertWhen_AnySignerIsInvalid() public {
+    uint256 mockPK = 999;
+
+    Signer memory maliciousSigner = Signer({mockPrivateKey: mockPK, signerAddress: vm.addr(mockPK)});
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(maliciousSigner.mockPrivateKey, keccak256(report));
+    signatures[1] = bytes.concat(r, s, bytes1(v));
+
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.InvalidSigner.selector, maliciousSigner.signerAddress));
+    s_forwarder.report(address(s_receiver), report, signatures);
   }
 
   function test_RevertWhen_ReportHasDuplicateSignatures() public {

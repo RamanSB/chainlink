@@ -115,7 +115,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     bytes32 reportId = _reportId(receiverAddress, workflowExecutionId);
     if (s_reports[reportId].transmitter != address(0)) revert ReportAlreadyProcessed();
 
-    if (signatures.length != s_configs[donId].f + 1)
+    if (s_configs[donId].f + 1 != signatures.length)
       revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
 
     // validate signatures
