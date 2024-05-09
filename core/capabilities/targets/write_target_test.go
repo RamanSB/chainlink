@@ -71,7 +71,7 @@ func TestEvmWrite(t *testing.T) {
 		method := forwardABI.Methods["report"]
 		err = method.Inputs.UnpackIntoMap(payload, req.EncodedPayload[4:])
 		require.NoError(t, err)
-		require.Equal(t, []byte{0x1, 0x2, 0x3}, payload["data"])
+		require.Equal(t, []byte{0x1, 0x2, 0x3}, payload["rawReport"])
 		require.Equal(t, [][]byte{}, payload["signatures"])
 	})
 
