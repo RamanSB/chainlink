@@ -32,7 +32,13 @@ contract KeystoneForwarder_SetConfigTest is BaseTest {
     s_forwarder.setConfig(DON_ID, F, signers);
   }
 
-  function test_SetConfig() public {
+  function test_SetConfig_FirstTime() public {
     s_forwarder.setConfig(DON_ID, F, _getSignerAddresses());
+  }
+
+  function test_SetConfig_WhenSignersAreRemoved() public {
+    s_forwarder.setConfig(DON_ID, F, _getSignerAddresses());
+
+    s_forwarder.setConfig(DON_ID, F, _getSignerAddresses(16));
   }
 }

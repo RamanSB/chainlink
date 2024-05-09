@@ -42,4 +42,12 @@ contract BaseTest is Test {
     }
     return signerAddrs;
   }
+
+  function _getSignerAddresses(uint256 limit) internal view returns (address[] memory) {
+    address[] memory signerAddrs = new address[](limit);
+    for (uint256 i = 0; i < limit; i++) {
+      signerAddrs[i] = s_signers[i].signerAddress;
+    }
+    return signerAddrs;
+  }
 }
