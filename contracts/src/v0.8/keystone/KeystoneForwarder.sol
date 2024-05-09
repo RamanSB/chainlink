@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "forge-std/console.sol";
 import {IForwarder} from "./interfaces/IForwarder.sol";
 import {IReceiver} from "./interfaces/IReceiver.sol";
 import {ConfirmedOwner} from "../shared/access/ConfirmedOwner.sol";
@@ -104,20 +103,17 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       revert InvalidReport();
     }
 
-    (bytes32 workflowId, bytes4 donIdBytes, bytes32 workflowExecutionId, bytes32 workflowOwner) = Utils._splitReport(
+    (bytes32 workflowId, uint32 donId, bytes32 workflowExecutionId, address workflowOwner) = Utils._splitReport(
       rawReport
     );
 
-    uint32 donId = uint32(donIdBytes);
-
+    // f can never be 0, so this means the config doesn't actually exist
+    if (s_configs[donId].f == 0) revert InvalidDonId(donId);
     if (signatures.length != s_configs[donId].f + 1) {
       revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
     }
 
-    // f can never be 0, so this means the config doesn't actually exist
-    if (s_configs[donId].f == 0) revert InvalidDonId(donId);
-
-    bytes32 reportId = _reportId(receiverAddress, address(bytes20(workflowOwner)), workflowExecutionId);
+    bytes32 reportId = _reportId(receiverAddress, workflowExecutionId);
 
     if (s_reports[reportId].transmitter != address(0)) {
       revert ReportAlreadyProcessed();
@@ -143,40 +139,27 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
       }
     }
 
-    console.log("before call");
-
     IReceiver receiver = IReceiver(receiverAddress);
     bool success;
-    try receiver.onReport(workflowId, address(bytes20(workflowOwner)), rawReport[Utils.REPORT_HEADER_LENGTH:]) {
-      console.log("called");
+    try receiver.onReport(workflowId, workflowOwner, rawReport[Utils.REPORT_HEADER_LENGTH:]) {
       success = true;
-    } catch (bytes memory reason) {
-      console.log(string(reason));
-      console.log("error");
+    } catch {
       success = false;
     }
 
     s_reports[reportId] = DeliveryStatus(msg.sender, success);
 
-    emit ReportProcessed(receiverAddress, address(bytes20(workflowOwner)), workflowExecutionId, success);
+    emit ReportProcessed(receiverAddress, workflowOwner, workflowExecutionId, success);
   }
 
-  function _reportId(
-    address receiver,
-    address workflowOwner,
-    bytes32 workflowExecutionId
-  ) internal pure returns (bytes32) {
+  function _reportId(address receiver, bytes32 workflowExecutionId) internal pure returns (bytes32) {
     // TODO: gas savings: could we just use a bytes key and avoid another keccak256 call
-    return keccak256(bytes.concat(bytes20(uint160(receiver)), bytes20(workflowOwner), workflowExecutionId));
+    return keccak256(bytes.concat(bytes20(uint160(receiver)), workflowExecutionId));
   }
 
   // get transmitter of a given report or 0x0 if it wasn't transmitted yet
-  function getTransmitter(
-    address receiver,
-    address workflowOwner,
-    bytes32 workflowExecutionId
-  ) external view returns (address) {
-    bytes32 reportId = _reportId(receiver, workflowOwner, workflowExecutionId);
+  function getTransmitter(address receiver, bytes32 workflowExecutionId) external view returns (address) {
+    bytes32 reportId = _reportId(receiver, workflowExecutionId);
     return s_reports[reportId].transmitter;
   }
 

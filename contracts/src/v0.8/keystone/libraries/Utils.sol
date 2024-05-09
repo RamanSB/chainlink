@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-// solhint-disable gas-custom-errors
 library Utils {
   uint256 public constant REPORT_HEADER_LENGTH = 88;
 
@@ -31,9 +30,12 @@ library Utils {
   }
 
   // solhint-disable avoid-low-level-calls, chainlink-solidity/explicit-returns
-  function _splitReport(
-    bytes memory rawReport
-  ) internal pure returns (bytes32 workflowId, bytes4 donId, bytes32 workflowExecutionId, bytes32 workflowOwner) {
+  function _splitReport(bytes memory rawReport) internal pure returns (bytes32, uint32, bytes32, address) {
+    bytes32 workflowId;
+    bytes32 donId;
+    bytes32 workflowExecutionId;
+    bytes32 workflowOwner;
+
     require(rawReport.length > REPORT_HEADER_LENGTH, "invalid report length");
     assembly {
       // skip first 32 bytes, contains length of the report
@@ -42,5 +44,7 @@ library Utils {
       workflowExecutionId := mload(add(rawReport, 68))
       workflowOwner := mload(add(rawReport, 100))
     }
+
+    return (workflowId, uint32(bytes4(donId)), workflowExecutionId, address(bytes20(workflowOwner)));
   }
 }
