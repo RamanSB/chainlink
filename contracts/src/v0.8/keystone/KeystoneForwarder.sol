@@ -10,34 +10,54 @@ import {TypeAndVersionInterface} from "../interfaces/TypeAndVersionInterface.sol
 contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterface {
   error ReentrantCall();
 
-  /// @notice This error is returned when the report data is invalid.
-  /// This can happen if the data is shorter than REPORT_HEADER_LENGTH.
+  /// @notice This error is returned when the report is shorter than
+  /// REPORT_METADATA_LENGTH, which is the minimum length of a report.
   error InvalidReport();
 
-  /// @notice This error is thrown whenever trying to set a config
-  /// with a fault tolerance of 0
+  /// @notice This error is thrown whenever trying to set a config with a fault
+  /// tolerance of 0.
   error FaultToleranceMustBePositive();
 
-  /// @notice This error is thrown whenever configuration provides
-  /// more signers than the maximum allowed number
+  /// @notice This error is thrown whenever configuration provides more signers
+  /// than the maximum allowed number.
   /// @param numSigners The number of signers who have signed the report
   /// @param maxSigners The maximum number of signers that can sign a report
   error ExcessSigners(uint256 numSigners, uint256 maxSigners);
 
-  /// @notice This error is thrown whenever a configuration is provided
-  /// with less than the minimum number of signers
+  /// @notice This error is thrown whenever a configuration is provided with
+  /// less than the minimum number of signers.
   /// @param numSigners The number of signers provided
   /// @param minSigners The minimum number of signers expected
   error InsufficientSigners(uint256 numSigners, uint256 minSigners);
 
-  error DuplicateSigner();
+  /// @notice This error is thrown whenever a duplicate signer address is
+  /// provided in the configuration.
+  /// @param signer The signer address that was duplicated.
+  error DuplicateSigner(address signer);
 
+  /// @notice This error is thrown whenever a report has an incorrect number of
+  /// signatures.
+  /// @param expected The number of signatures expected, F + 1
+  /// @param received The number of signatures received
   error WrongNumberOfSignatures(uint256 expected, uint256 received);
 
+  /// @notice This error is thrown whenever a report specifies a DON ID that
+  /// does not have a configuration.
+  /// @param donId The DON ID that was provided in the report
   error InvalidDonId(uint32 donId);
+
+  /// @notice This error is thrown whenever a signer address is not in the
+  /// configuration.
+  /// @param signer The signer address that was not in the configuration
   error InvalidSigner(address signer);
+
+  /// @notice This error is thrown whenever a signature is invalid.
+  /// @param signature The signature that was invalid
   error InvalidSignature(bytes signature);
-  error ReportAlreadyProcessed();
+
+  /// @notice This error is thrown whenever a report has already been processed.
+  /// @param reportId The ID of the report that was already processed
+  error ReportAlreadyProcessed(bytes32 reportId);
 
   bool internal s_reentrancyGuard; // guard against reentrancy
 
@@ -54,9 +74,13 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     bool success;
   }
 
-  // reportId = keccak256(bytes20(receiver) | workflowOwner | workflowExecutionId)
   mapping(bytes32 reportId => DeliveryStatus status) internal s_reports;
 
+  /// @notice Emitted when a report is processed
+  /// @param receiver The address of the receiver contract
+  /// @param workflowOwner The address of the workflow owner
+  /// @param workflowExecutionId The ID of the workflow execution
+  /// @param result The result of the attempted delivery. True if successful.
   event ReportProcessed(
     address indexed receiver,
     address indexed workflowOwner,
@@ -69,7 +93,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   uint256 internal constant MAX_ORACLES = 31;
   // 32 bytes for workflowId, 4 bytes for donId, 32 bytes for
   // workflowExecutionId, 20 bytes for workflowOwner
-  uint256 internal constant REPORT_HEADER_LENGTH = 88;
+  uint256 internal constant REPORT_METADATA_LENGTH = 88;
   uint256 internal constant SIGNATURE_LENGTH = 65;
 
   function setConfig(uint32 donId, uint8 f, address[] calldata signers) external nonReentrant {
@@ -90,7 +114,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     for (uint256 i = 0; i < signers.length; ++i) {
       // assign indices, detect duplicates
       address signer = signers[i];
-      if (s_configs[donId]._positions[signer] != 0) revert DuplicateSigner();
+      if (s_configs[donId]._positions[signer] != 0) revert DuplicateSigner(signer);
       s_configs[donId]._positions[signer] = uint8(i) + 1;
       s_configs[donId].signers.push(signer);
     }
@@ -103,7 +127,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     bytes calldata rawReport,
     bytes[] calldata signatures
   ) external nonReentrant {
-    if (rawReport.length < REPORT_HEADER_LENGTH) {
+    if (rawReport.length < REPORT_METADATA_LENGTH) {
       revert InvalidReport();
     }
 
@@ -113,7 +137,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     if (s_configs[donId].f == 0) revert InvalidDonId(donId);
 
     bytes32 reportId = _reportId(receiverAddress, workflowExecutionId);
-    if (s_reports[reportId].transmitter != address(0)) revert ReportAlreadyProcessed();
+    if (s_reports[reportId].transmitter != address(0)) revert ReportAlreadyProcessed(reportId);
 
     if (s_configs[donId].f + 1 != signatures.length)
       revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
@@ -133,14 +157,14 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
         index = uint8(s_configs[donId]._positions[signer]);
         if (index == 0) revert InvalidSigner(signer); // index is 1-indexed so we can detect unset signers
         index -= 1;
-        if (signed[index] != address(0)) revert DuplicateSigner();
+        if (signed[index] != address(0)) revert DuplicateSigner(signer);
         signed[index] = signer;
       }
     }
 
     IReceiver receiver = IReceiver(receiverAddress);
     bool success;
-    try receiver.onReport(workflowId, workflowOwner, rawReport[REPORT_HEADER_LENGTH:]) {
+    try receiver.onReport(workflowId, workflowOwner, rawReport[REPORT_METADATA_LENGTH:]) {
       success = true;
     } catch {
       success = false;

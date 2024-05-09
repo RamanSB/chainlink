@@ -101,7 +101,7 @@ contract KeystoneForwarder_ReportTest is BaseTest {
   function test_RevertWhen_ReportHasDuplicateSignatures() public {
     signatures[1] = signatures[0]; // repeat a signature
 
-    vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.DuplicateSigner.selector, s_signers[0].signerAddress));
     s_forwarder.report(address(s_receiver), report, signatures);
   }
 

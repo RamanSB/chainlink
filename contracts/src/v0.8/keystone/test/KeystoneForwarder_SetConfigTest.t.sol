@@ -28,7 +28,7 @@ contract KeystoneForwarder_SetConfigTest is BaseTest {
     address[] memory signers = _getSignerAddresses();
     signers[1] = signers[0];
 
-    vm.expectRevert(KeystoneForwarder.DuplicateSigner.selector);
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.DuplicateSigner.selector, signers[0]));
     s_forwarder.setConfig(DON_ID, F, signers);
   }
 
