@@ -6,7 +6,10 @@ import {IReceiver} from "./interfaces/IReceiver.sol";
 import {ConfirmedOwner} from "../shared/access/ConfirmedOwner.sol";
 import {TypeAndVersionInterface} from "../interfaces/TypeAndVersionInterface.sol";
 
-// solhint-disable gas-custom-errors, no-unused-vars
+/// @notice This is an entry point for `write_${chain}` Target capability. It
+/// allows nodes to determine if reports have been processed (successfully or
+/// not) in a decentralized and product-agnostic way by recording processed
+/// reports.
 contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterface {
   error ReentrantCall();
 
