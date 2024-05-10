@@ -75,6 +75,8 @@ const (
 // Should only be run ONCE per node, after a successful Dial
 func (n *node) aliveLoop() {
 	defer n.wg.Done()
+	ctx, cancel := n.stopCh.NewCtx()
+	defer cancel()
 
 	{
 		// sanity check
@@ -96,7 +98,7 @@ func (n *node) aliveLoop() {
 	lggr.Tracew("Alive loop starting", "nodeState", n.State())
 
 	headsC := make(chan *evmtypes.Head)
-	sub, err := n.EthSubscribe(n.nodeCtx, headsC, "newHeads")
+	sub, err := n.EthSubscribe(ctx, headsC, "newHeads")
 	if err != nil {
 		lggr.Errorw("Initial subscribe for heads failed", "nodeState", n.State())
 		n.declareUnreachable()
@@ -137,49 +139,54 @@ func (n *node) aliveLoop() {
 
 	for {
 		select {
-		case <-n.nodeCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-pollCh:
-			var version string
-			promEVMPoolRPCNodePolls.WithLabelValues(n.chainID.String(), n.name).Inc()
-			lggr.Tracew("Polling for version", "nodeState", n.State(), "pollFailures", pollFailures)
-			ctx, cancel := context.WithTimeout(n.nodeCtx, pollInterval)
-			ctx, cancel2 := n.makeQueryCtx(ctx)
-			err := n.CallContext(ctx, &version, "web3_clientVersion")
-			cancel2()
-			cancel()
-			if err != nil {
-				// prevent overflow
-				if pollFailures < math.MaxUint32 {
-					promEVMPoolRPCNodePollsFailed.WithLabelValues(n.chainID.String(), n.name).Inc()
-					pollFailures++
-				}
-				lggr.Warnw(fmt.Sprintf("Poll failure, RPC endpoint %s failed to respond properly", n.String()), "err", err, "pollFailures", pollFailures, "nodeState", n.State())
-			} else {
-				lggr.Debugw("Version poll successful", "nodeState", n.State(), "clientVersion", version)
-				promEVMPoolRPCNodePollsSuccess.WithLabelValues(n.chainID.String(), n.name).Inc()
-				pollFailures = 0
-			}
-			if pollFailureThreshold > 0 && pollFailures >= pollFailureThreshold {
-				lggr.Errorw(fmt.Sprintf("RPC endpoint failed to respond to %d consecutive polls", pollFailures), "pollFailures", pollFailures, "nodeState", n.State())
-				if n.nLiveNodes != nil {
-					if l, _, _ := n.nLiveNodes(); l < 2 {
-						lggr.Criticalf("RPC endpoint failed to respond to polls; %s %s", msgCannotDisable, msgDegradedState)
-						continue
+			if !func(ctx context.Context) bool {
+				var version string
+				promEVMPoolRPCNodePolls.WithLabelValues(n.chainID.String(), n.name).Inc()
+				lggr.Tracew("Polling for version", "nodeState", n.State(), "pollFailures", pollFailures)
+				ctx, cancel := context.WithTimeout(ctx, pollInterval)
+				ctx, cancel2 := n.makeQueryCtx(ctx)
+				err := n.CallContext(ctx, &version, "web3_clientVersion")
+				cancel2()
+				cancel()
+				if err != nil {
+					// prevent overflow
+					if pollFailures < math.MaxUint32 {
+						promEVMPoolRPCNodePollsFailed.WithLabelValues(n.chainID.String(), n.name).Inc()
+						pollFailures++
 					}
+					lggr.Warnw(fmt.Sprintf("Poll failure, RPC endpoint %s failed to respond properly", n.String()), "err", err, "pollFailures", pollFailures, "nodeState", n.State())
+				} else {
+					lggr.Debugw("Version poll successful", "nodeState", n.State(), "clientVersion", version)
+					promEVMPoolRPCNodePollsSuccess.WithLabelValues(n.chainID.String(), n.name).Inc()
+					pollFailures = 0
 				}
-				n.declareUnreachable()
-				return
-			}
-			_, num, td := n.StateAndLatest()
-			if outOfSync, liveNodes := n.syncStatus(num, td); outOfSync {
-				// note: there must be another live node for us to be out of sync
-				lggr.Errorw("RPC endpoint has fallen behind", "blockNumber", num, "totalDifficulty", td, "nodeState", n.State())
-				if liveNodes < 2 {
-					lggr.Criticalf("RPC endpoint has fallen behind; %s %s", msgCannotDisable, msgDegradedState)
-					continue
+				if pollFailureThreshold > 0 && pollFailures >= pollFailureThreshold {
+					lggr.Errorw(fmt.Sprintf("RPC endpoint failed to respond to %d consecutive polls", pollFailures), "pollFailures", pollFailures, "nodeState", n.State())
+					if n.nLiveNodes != nil {
+						if l, _, _ := n.nLiveNodes(); l < 2 {
+							lggr.Criticalf("RPC endpoint failed to respond to polls; %s %s", msgCannotDisable, msgDegradedState)
+							return true
+						}
+					}
+					n.declareUnreachable()
+					return false
 				}
-				n.declareOutOfSync(n.isOutOfSync)
+				_, num, td := n.StateAndLatest()
+				if outOfSync, liveNodes := n.syncStatus(num, td); outOfSync {
+					// note: there must be another live node for us to be out of sync
+					lggr.Errorw("RPC endpoint has fallen behind", "blockNumber", num, "totalDifficulty", td, "nodeState", n.State())
+					if liveNodes < 2 {
+						lggr.Criticalf("RPC endpoint has fallen behind; %s %s", msgCannotDisable, msgDegradedState)
+						return true
+					}
+					n.declareOutOfSync(n.isOutOfSync)
+					return false
+				}
+				return true
+			}(ctx) {
 				return
 			}
 		case bh, open := <-headsC:
@@ -262,6 +269,8 @@ const (
 // outOfSyncLoop takes an OutOfSync node and waits until isOutOfSync returns false to go back to live status
 func (n *node) outOfSyncLoop(isOutOfSync func(num int64, td *big.Int) bool) {
 	defer n.wg.Done()
+	ctx, cancel := n.stopCh.NewCtx()
+	defer cancel()
 
 	{
 		// sanity check
@@ -281,14 +290,14 @@ func (n *node) outOfSyncLoop(isOutOfSync func(num int64, td *big.Int) bool) {
 	lggr.Debugw("Trying to revive out-of-sync RPC node", "nodeState", n.State())
 
 	// Need to redial since out-of-sync nodes are automatically disconnected
-	if err := n.dial(n.nodeCtx); err != nil {
+	if err := n.dial(ctx); err != nil {
 		lggr.Errorw("Failed to dial out-of-sync RPC node", "nodeState", n.State())
 		n.declareUnreachable()
 		return
 	}
 
 	// Manually re-verify since out-of-sync nodes are automatically disconnected
-	if err := n.verify(n.nodeCtx); err != nil {
+	if err := n.verify(ctx); err != nil {
 		lggr.Errorw(fmt.Sprintf("Failed to verify out-of-sync RPC node: %v", err), "err", err)
 		n.declareInvalidChainID()
 		return
@@ -297,7 +306,7 @@ func (n *node) outOfSyncLoop(isOutOfSync func(num int64, td *big.Int) bool) {
 	lggr.Tracew("Successfully subscribed to heads feed on out-of-sync RPC node", "nodeState", n.State())
 
 	ch := make(chan *evmtypes.Head)
-	subCtx, cancel := n.makeQueryCtx(n.nodeCtx)
+	subCtx, cancel := n.makeQueryCtx(ctx)
 	// raw call here to bypass node state checking
 	sub, err := n.ws.rpc.EthSubscribe(subCtx, ch, "newHeads")
 	cancel()
@@ -310,7 +319,7 @@ func (n *node) outOfSyncLoop(isOutOfSync func(num int64, td *big.Int) bool) {
 
 	for {
 		select {
-		case <-n.nodeCtx.Done():
+		case <-ctx.Done():
 			return
 		case head, open := <-ch:
 			if !open {
@@ -344,6 +353,8 @@ func (n *node) outOfSyncLoop(isOutOfSync func(num int64, td *big.Int) bool) {
 
 func (n *node) unreachableLoop() {
 	defer n.wg.Done()
+	ctx, cancel := n.stopCh.NewCtx()
+	defer cancel()
 
 	{
 		// sanity check
@@ -366,12 +377,12 @@ func (n *node) unreachableLoop() {
 
 	for {
 		select {
-		case <-n.nodeCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-time.After(dialRetryBackoff.Duration()):
 			lggr.Tracew("Trying to re-dial RPC node", "nodeState", n.State())
 
-			err := n.dial(n.nodeCtx)
+			err := n.dial(ctx)
 			if err != nil {
 				lggr.Errorw(fmt.Sprintf("Failed to redial RPC node; still unreachable: %v", err), "err", err, "nodeState", n.State())
 				continue
@@ -379,7 +390,7 @@ func (n *node) unreachableLoop() {
 
 			n.setState(NodeStateDialed)
 
-			err = n.verify(n.nodeCtx)
+			err = n.verify(ctx)
 
 			if pkgerrors.Is(err, errInvalidChainID) {
 				lggr.Errorw("Failed to redial RPC node; remote endpoint returned the wrong chain ID", "err", err)
@@ -400,6 +411,8 @@ func (n *node) unreachableLoop() {
 
 func (n *node) invalidChainIDLoop() {
 	defer n.wg.Done()
+	ctx, cancel := n.stopCh.NewCtx()
+	defer cancel()
 
 	{
 		// sanity check
@@ -422,10 +435,10 @@ func (n *node) invalidChainIDLoop() {
 
 	for {
 		select {
-		case <-n.nodeCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-time.After(chainIDRecheckBackoff.Duration()):
-			err := n.verify(n.nodeCtx)
+			err := n.verify(ctx)
 			if pkgerrors.Is(err, errInvalidChainID) {
 				lggr.Errorw("Failed to verify RPC node; remote endpoint returned the wrong chain ID", "err", err)
 				continue

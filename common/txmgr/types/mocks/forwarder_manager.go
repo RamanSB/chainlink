@@ -63,9 +63,9 @@ func (_m *ForwarderManager[ADDR]) ConvertPayload(dest ADDR, origPayload []byte) 
 	return r0, r1
 }
 
-// ForwarderFor provides a mock function with given fields: addr
-func (_m *ForwarderManager[ADDR]) ForwarderFor(addr ADDR) (ADDR, error) {
-	ret := _m.Called(addr)
+// ForwarderFor provides a mock function with given fields: ctx, addr
+func (_m *ForwarderManager[ADDR]) ForwarderFor(ctx context.Context, addr ADDR) (ADDR, error) {
+	ret := _m.Called(ctx, addr)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ForwarderFor")
@@ -73,17 +73,17 @@ func (_m *ForwarderManager[ADDR]) ForwarderFor(addr ADDR) (ADDR, error) {
 
 	var r0 ADDR
 	var r1 error
-	if rf, ok := ret.Get(0).(func(ADDR) (ADDR, error)); ok {
-		return rf(addr)
+	if rf, ok := ret.Get(0).(func(context.Context, ADDR) (ADDR, error)); ok {
+		return rf(ctx, addr)
 	}
-	if rf, ok := ret.Get(0).(func(ADDR) ADDR); ok {
-		r0 = rf(addr)
+	if rf, ok := ret.Get(0).(func(context.Context, ADDR) ADDR); ok {
+		r0 = rf(ctx, addr)
 	} else {
 		r0 = ret.Get(0).(ADDR)
 	}
 
-	if rf, ok := ret.Get(1).(func(ADDR) error); ok {
-		r1 = rf(addr)
+	if rf, ok := ret.Get(1).(func(context.Context, ADDR) error); ok {
+		r1 = rf(ctx, addr)
 	} else {
 		r1 = ret.Error(1)
 	}
