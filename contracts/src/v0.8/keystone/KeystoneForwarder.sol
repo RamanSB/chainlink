@@ -39,7 +39,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
   /// signatures.
   /// @param expected The number of signatures expected, F + 1
   /// @param received The number of signatures received
-  error WrongNumberOfSignatures(uint256 expected, uint256 received);
+  error InvalidSignatureCount(uint256 expected, uint256 received);
 
   /// @notice This error is thrown whenever a report specifies a DON ID that
   /// does not have a configuration.
@@ -67,6 +67,8 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     address[] signers;
     mapping(address => uint256) _positions; // 1-indexed to detect unset values
   }
+
+  /// @notice Contains the configuration for each DON ID
   mapping(uint32 donId => OracleSet) internal s_configs;
 
   struct DeliveryStatus {
@@ -104,14 +106,14 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     // TODO: how does setConfig handle expiration? e.g. if the signer set changes
 
     // remove any old signer addresses
-    for (uint256 i = 0; i < s_configs[donId].signers.length; ++i) {
+    for (uint256 i; i < s_configs[donId].signers.length; ++i) {
       address signer = s_configs[donId].signers[i];
       delete s_configs[donId]._positions[signer];
     }
 
     // add new signer addresses
     s_configs[donId].signers = signers;
-    for (uint256 i = 0; i < signers.length; ++i) {
+    for (uint256 i; i < signers.length; ++i) {
       // assign indices, detect duplicates
       address signer = signers[i];
       if (s_configs[donId]._positions[signer] != 0) revert DuplicateSigner(signer);
@@ -140,15 +142,15 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     if (s_reports[reportId].transmitter != address(0)) revert ReportAlreadyProcessed(reportId);
 
     if (s_configs[donId].f + 1 != signatures.length)
-      revert WrongNumberOfSignatures(s_configs[donId].f + 1, signatures.length);
+      revert InvalidSignatureCount(s_configs[donId].f + 1, signatures.length);
 
     // validate signatures
     {
       bytes32 hash = keccak256(rawReport);
 
       address[MAX_ORACLES] memory signed;
-      uint8 index = 0;
-      for (uint256 i = 0; i < signatures.length; i++) {
+      uint8 index;
+      for (uint256 i; i < signatures.length; ++i) {
         // TODO: is libocr-style multiple bytes32 arrays more optimal, gas-wise?
         (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signatures[i]);
         address signer = ecrecover(hash, v, r, s);
@@ -167,7 +169,7 @@ contract KeystoneForwarder is IForwarder, ConfirmedOwner, TypeAndVersionInterfac
     try receiver.onReport(workflowId, workflowOwner, rawReport[REPORT_METADATA_LENGTH:]) {
       success = true;
     } catch {
-      success = false;
+      // Do nothing, success is already false
     }
 
     s_reports[reportId] = DeliveryStatus(msg.sender, success);

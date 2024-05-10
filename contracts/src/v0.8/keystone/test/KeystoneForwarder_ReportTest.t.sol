@@ -66,7 +66,7 @@ contract KeystoneForwarder_ReportTest is BaseTest {
     bytes[] memory fewerSignatures = new bytes[](F);
 
     vm.expectRevert(
-      abi.encodeWithSelector(KeystoneForwarder.WrongNumberOfSignatures.selector, F + 1, fewerSignatures.length)
+      abi.encodeWithSelector(KeystoneForwarder.InvalidSignatureCount.selector, F + 1, fewerSignatures.length)
     );
     s_forwarder.report(address(s_receiver), report, fewerSignatures);
   }
@@ -75,7 +75,7 @@ contract KeystoneForwarder_ReportTest is BaseTest {
     bytes[] memory moreSignatures = new bytes[](F + 2);
 
     vm.expectRevert(
-      abi.encodeWithSelector(KeystoneForwarder.WrongNumberOfSignatures.selector, F + 1, moreSignatures.length)
+      abi.encodeWithSelector(KeystoneForwarder.InvalidSignatureCount.selector, F + 1, moreSignatures.length)
     );
     s_forwarder.report(address(s_receiver), report, moreSignatures);
   }
@@ -107,8 +107,9 @@ contract KeystoneForwarder_ReportTest is BaseTest {
 
   function test_RevertWhen_ReportAlreadyProcessed() public {
     s_forwarder.report(address(s_receiver), report, signatures);
+    bytes32 reportId = keccak256(bytes.concat(bytes20(uint160(address(s_receiver))), executionId));
 
-    vm.expectRevert(KeystoneForwarder.ReportAlreadyProcessed.selector);
+    vm.expectRevert(abi.encodeWithSelector(KeystoneForwarder.ReportAlreadyProcessed.selector, reportId));
     s_forwarder.report(address(s_receiver), report, signatures);
   }
 
